@@ -73,6 +73,7 @@ members = [
     "apps/homepanel",
     "apps/inkling",
     "apps/kitchencard",
+    "apps/lifeview",
     "apps/lichess",
     "apps/logicpack",
     "apps/morse",

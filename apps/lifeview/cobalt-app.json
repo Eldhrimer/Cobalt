@@ -1,0 +1,11 @@
+{
+  "id": "lifeview",
+  "display_name": "Lifeview",
+  "short_label": "Life",
+  "summary": "See your life in weeks, years and chapters.",
+  "page_description": "A journal companion that shows your life as a grid of weeks coloured by chapters, with a today view and local marks you can edit from a file on your computer.",
+  "version": "0.1.0",
+  "release_notes": "First version.",
+  "glyph": "check",
+  "capabilities": []
+}

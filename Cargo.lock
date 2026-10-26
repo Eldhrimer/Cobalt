@@ -1226,6 +1226,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kobo-lifeview"
+version = "0.1.0"
+dependencies = [
+ "kobo-sdk",
+]
+
+[[package]]
 name = "kobo-logicpack"
 version = "0.1.5"
 dependencies = [
