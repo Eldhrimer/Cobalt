@@ -1,0 +1,28 @@
+{
+  "id": "drafter",
+  "display_name": "Drafter",
+  "short_label": "Drafter",
+  "summary": "Mark up one section of your book at a time and send it for revision.",
+  "page_description": "Read a section of your manuscript from GitHub, hold a word to highlight, split or move its paragraph, and send your marks to a gateway you run. It revises under your rules, and you keep or discard each change before it is committed.",
+  "version": "0.1.0",
+  "release_notes": "First release: sections, block editing, highlights, outline moves, revision review and commit.",
+  "glyph": "note",
+  "capabilities": [
+    "network"
+  ],
+  "setup": {
+    "steps": [
+      {
+        "text": "Run the Drafter gateway on a computer or server you control, behind HTTPS, with a bearer token. It holds your GitHub and model credentials; the reader never sees them."
+      },
+      {
+        "text": "Once per reader: with it plugged in over USB, run kobo setup --enable-ssh. Then save it so the commands below find it on Wi-Fi without an address.",
+        "command": "kobo pair"
+      },
+      {
+        "text": "Sign Drafter in. The token is checked against the gateway before it is installed, and it only ever works with that gateway.",
+        "command": "kobo drafter login --gateway https://drafter.example.net --token-file token.txt"
+      }
+    ]
+  }
+}

@@ -47,7 +47,7 @@ cargo run -p kobo-cli -- drive --script tour.kobo --shots target/shots
 cargo run -p kobo-cli -- drive --step "tap Search" --step "expect Results"
 ```
 
-A script is one step per line: `tap LABEL`, `tap-at X,Y`, `type TEXT`,
+A script is one step per line: `tap LABEL`, `tap-at X,Y`, `hold-at X,Y`, `type TEXT`,
 `expect TEXT`, `expect-missing TEXT`, `wait-for TEXT`, `clean`, `shot NAME`,
 `dump`, `scenario NAME`, `lifecycle background`, `wait MS`. A failing step
 reports the line and the reason and screenshots the panel first. Add `--ideal`

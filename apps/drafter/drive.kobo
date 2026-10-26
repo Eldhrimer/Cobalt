@@ -1,0 +1,10 @@
+# The gateway setup names the companion login command and the address
+# field takes typed input on the on-screen keyboard.
+wait-for Drafter
+expect Connect a gateway
+clean
+shot drafter-setup
+type notes
+expect https://notes
+clean
+shot drafter-typed

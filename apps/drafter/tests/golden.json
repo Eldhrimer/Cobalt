@@ -1,0 +1,1904 @@
+{
+ "body": "\nFirst paragraph here, with **bold words** and *slanted ones* in it. It ends plainly.\n\nSecond paragraph is short, with a [[Core Rules|link]] and [a site](https://example.com/x).\n\n**Pass.** Your total meets or beats the target, and no Slip turns up.\n\nFourth café paragraph has multibyte text and a `code run` inside it.\n\nPrice is 5 \\* 3 apples, no more.\n\n> [!example]\n> A callout about a lantern.\n",
+ "base": [
+  {
+   "id": "a60dd9bf",
+   "kind": "para",
+   "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+   "spans": [
+    [
+     27,
+     37,
+     "b"
+    ],
+    [
+     42,
+     54,
+     "i"
+    ]
+   ]
+  },
+  {
+   "id": "8256b017",
+   "kind": "para",
+   "text": "Second paragraph is short, with a link and a site.",
+   "spans": []
+  },
+  {
+   "id": "e6f9b40f",
+   "kind": "para",
+   "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+   "spans": [
+    [
+     0,
+     5,
+     "b"
+    ]
+   ]
+  },
+  {
+   "id": "2332bcd3",
+   "kind": "para",
+   "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+   "spans": [
+    [
+     48,
+     56,
+     "code"
+    ]
+   ]
+  },
+  {
+   "id": "a578789a",
+   "kind": "para",
+   "text": "Price is 5 * 3 apples, no more.",
+   "spans": []
+  },
+  {
+   "id": "16ef9995",
+   "kind": "callout",
+   "label": "example",
+   "title": "",
+   "parts": [
+    {
+     "text": "A callout about a lantern.",
+     "spans": []
+    }
+   ]
+  }
+ ],
+ "vectors": [
+  {
+   "name": "move_to_top",
+   "ops": [
+    {
+     "op": "move",
+     "block": "e6f9b40f",
+     "after": null
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "move_after",
+   "ops": [
+    {
+     "op": "move",
+     "block": "a60dd9bf",
+     "after": "e6f9b40f"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "delete_two",
+   "ops": [
+    {
+     "op": "delete",
+     "block": "8256b017"
+    },
+    {
+     "op": "delete",
+     "block": "16ef9995"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_inside_bold",
+   "ops": [
+    {
+     "op": "split",
+     "block": "a60dd9bf",
+     "at": 32,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold",
+      "spans": [
+       [
+        27,
+        31,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ],
+       [
+        10,
+        22,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_at_a_space",
+   "ops": [
+    {
+     "op": "split",
+     "block": "a60dd9bf",
+     "at": 61,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "It ends plainly.",
+      "spans": []
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_multibyte",
+   "ops": [
+    {
+     "op": "split",
+     "block": "2332bcd3",
+     "at": 13,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café",
+      "spans": []
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        35,
+        43,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_at_italic_start",
+   "ops": [
+    {
+     "op": "split",
+     "block": "a60dd9bf",
+     "at": 42,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        0,
+        12,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_inside_italic",
+   "ops": [
+    {
+     "op": "split",
+     "block": "a60dd9bf",
+     "at": 50,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        49,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "ones in it. It ends plainly.",
+      "spans": [
+       [
+        0,
+        4,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_inside_wikilink",
+   "ops": [
+    {
+     "op": "split",
+     "block": "8256b017",
+     "at": 36,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a li",
+      "spans": []
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "nk and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_at_wikilink_start",
+   "ops": [
+    {
+     "op": "split",
+     "block": "8256b017",
+     "at": 34,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a",
+      "spans": []
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_inside_md_link",
+   "ops": [
+    {
+     "op": "split",
+     "block": "8256b017",
+     "at": 46,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a s",
+      "spans": []
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "ite.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_at_escaped_star",
+   "ops": [
+    {
+     "op": "split",
+     "block": "a578789a",
+     "at": 11,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5",
+      "spans": []
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "* 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "split_inside_code",
+   "ops": [
+    {
+     "op": "split",
+     "block": "2332bcd3",
+     "at": 53,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code",
+      "spans": [
+       [
+        48,
+        52,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "run inside it.",
+      "spans": [
+       [
+        0,
+        3,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "merge_bold_runs",
+   "ops": [
+    {
+     "op": "merge",
+     "block": "e6f9b40f"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site. Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        51,
+        56,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "merge_with_link",
+   "ops": [
+    {
+     "op": "merge",
+     "block": "8256b017"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly. Second paragraph is short, with a link and a site.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "edit_and_insert",
+   "ops": [
+    {
+     "op": "edit",
+     "block": "8256b017",
+     "text": "  Retyped by hand.  "
+    },
+    {
+     "op": "insert",
+     "after": "a60dd9bf",
+     "text": "Fresh line.",
+     "new": "i1"
+    },
+    {
+     "op": "insert",
+     "after": null,
+     "text": "Very first.",
+     "new": "i2"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "i2",
+      "kind": "para",
+      "text": "Very first.",
+      "spans": []
+     },
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "i1",
+      "kind": "para",
+      "text": "Fresh line.",
+      "spans": []
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Retyped by hand.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "marks_follow_split",
+   "ops": [
+    {
+     "op": "mark",
+     "block": "a60dd9bf",
+     "start": 0,
+     "end": 1,
+     "text": "It ends plainly",
+     "ask": "tighten",
+     "note": ""
+    },
+    {
+     "op": "split",
+     "block": "a60dd9bf",
+     "at": 61,
+     "new": "n1"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "It ends plainly.",
+      "spans": []
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": [
+     {
+      "block": "n1",
+      "excerpt": "It ends plainly",
+      "ask": "tighten"
+     }
+    ]
+   }
+  },
+  {
+   "name": "marks_follow_merge",
+   "ops": [
+    {
+     "op": "mark",
+     "block": "e6f9b40f",
+     "start": 0,
+     "end": 1,
+     "text": "no Slip",
+     "ask": "tighten",
+     "note": ""
+    },
+    {
+     "op": "merge",
+     "block": "e6f9b40f"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site. Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        51,
+        56,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": [
+     {
+      "block": "8256b017",
+      "excerpt": "no Slip",
+      "ask": "tighten"
+     }
+    ]
+   }
+  },
+  {
+   "name": "marks_dropped_on_delete",
+   "ops": [
+    {
+     "op": "mark",
+     "block": "8256b017",
+     "start": 0,
+     "end": 1,
+     "text": "short",
+     "ask": "tighten",
+     "note": ""
+    },
+    {
+     "op": "delete",
+     "block": "8256b017"
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": []
+   }
+  },
+  {
+   "name": "mark_on_callout",
+   "ops": [
+    {
+     "op": "mark",
+     "block": "16ef9995",
+     "start": 0,
+     "end": 1,
+     "text": "lantern",
+     "ask": "concrete",
+     "note": ""
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ],
+       [
+        42,
+        54,
+        "i"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site.",
+      "spans": []
+     },
+     {
+      "id": "e6f9b40f",
+      "kind": "para",
+      "text": "Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        0,
+        5,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     }
+    ],
+    "marks": [
+     {
+      "block": "16ef9995",
+      "excerpt": "lantern",
+      "ask": "concrete"
+     }
+    ]
+   }
+  },
+  {
+   "name": "chain",
+   "ops": [
+    {
+     "op": "split",
+     "block": "a60dd9bf",
+     "at": 42,
+     "new": "n1"
+    },
+    {
+     "op": "move",
+     "block": "n1",
+     "after": "16ef9995"
+    },
+    {
+     "op": "merge",
+     "block": "e6f9b40f"
+    },
+    {
+     "op": "mark",
+     "block": "n1",
+     "start": 0,
+     "end": 1,
+     "text": "ones",
+     "ask": "plainer",
+     "note": ""
+    }
+   ],
+   "expect": {
+    "blocks": [
+     {
+      "id": "a60dd9bf",
+      "kind": "para",
+      "text": "First paragraph here, with bold words and",
+      "spans": [
+       [
+        27,
+        37,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "8256b017",
+      "kind": "para",
+      "text": "Second paragraph is short, with a link and a site. Pass. Your total meets or beats the target, and no Slip turns up.",
+      "spans": [
+       [
+        51,
+        56,
+        "b"
+       ]
+      ]
+     },
+     {
+      "id": "2332bcd3",
+      "kind": "para",
+      "text": "Fourth café paragraph has multibyte text and a code run inside it.",
+      "spans": [
+       [
+        48,
+        56,
+        "code"
+       ]
+      ]
+     },
+     {
+      "id": "a578789a",
+      "kind": "para",
+      "text": "Price is 5 * 3 apples, no more.",
+      "spans": []
+     },
+     {
+      "id": "16ef9995",
+      "kind": "callout",
+      "label": "example",
+      "title": "",
+      "parts": [
+       {
+        "text": "A callout about a lantern.",
+        "spans": []
+       }
+      ]
+     },
+     {
+      "id": "n1",
+      "kind": "para",
+      "text": "slanted ones in it. It ends plainly.",
+      "spans": [
+       [
+        0,
+        12,
+        "i"
+       ]
+      ]
+     }
+    ],
+    "marks": [
+     {
+      "block": "n1",
+      "excerpt": "ones",
+      "ask": "plainer"
+     }
+    ]
+   }
+  }
+ ]
+}

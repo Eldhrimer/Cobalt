@@ -1728,15 +1728,18 @@ impl AppSession {
                         }
                     }
                 }
-                "tap" => {
+                "tap" | "hold" => {
                     let (x, y) = parse_touch(source.as_bytes())
-                        .ok_or_else(|| io::Error::other("invalid tap coordinates"))?;
-                    let events = state.input.tap(
+                        .ok_or_else(|| io::Error::other(format!("invalid {kind} coordinates")))?;
+                    let (x, y) = (
                         u32::try_from(x).map_err(io::Error::other)?,
                         u32::try_from(y).map_err(io::Error::other)?,
-                        &POSE,
-                        millis,
-                    )?;
+                    );
+                    let events = if kind == "hold" {
+                        state.input.hold(x, y, &POSE, millis)?
+                    } else {
+                        state.input.tap(x, y, &POSE, millis)?
+                    };
                     for (event, held) in events {
                         if let Some(message) = state.input_event(event, held) {
                             messages.push(message);
@@ -2331,6 +2334,26 @@ impl AppSession {
                     }
                 }
             }
+            ("POST", "/hold") => {
+                if !self
+                    .state
+                    .lock()
+                    .map_err(|_| io::Error::other("app state lock poisoned"))?
+                    .panel
+                    .accepts_input()
+                {
+                    return write_response(&mut stream, 409, "text/plain", b"Panel is busy or its contents are uncertain. Complete the update or retry the failed refresh before holding.");
+                }
+                let response = std::str::from_utf8(&request.body)
+                    .map_err(io::Error::other)
+                    .and_then(|source| self.replay_input(&format!("hold {source}")));
+                match response {
+                    Ok(()) => write_response(&mut stream, 204, "text/plain; charset=utf-8", b""),
+                    Err(error) => {
+                        write_response(&mut stream, 400, "text/plain", error.to_string().as_bytes())
+                    }
+                }
+            }
             ("POST", "/scenario") => match Scenario::parse(&request.body) {
                 Some(scenario) => match self.set_scenario(scenario) {
                     Ok(()) => write_response(&mut stream, 204, "text/plain; charset=utf-8", b""),
@@ -2609,6 +2632,22 @@ fn layout_json_with_chrome(
                 rect.height,
                 centre.0,
                 centre.1,
+            ),
+        );
+    }
+    // Where each word of selectable text is, and the coordinates a hold on it
+    // resolves to, so a driver can hold a particular word the way a thumb would.
+    json.push_str("],\"textHits\":[");
+    for (index, (rect, hit)) in layout.text_hits.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        let rect = physical_rect(orientation, *rect);
+        let _ = std::fmt::Write::write_fmt(
+            &mut json,
+            format_args!(
+                "{{\"x\":{},\"y\":{},\"width\":{},\"height\":{},\"context\":{},\"start\":{},\"end\":{}}}",
+                rect.x, rect.y, rect.width, rect.height, hit.context, hit.start, hit.end,
             ),
         );
     }

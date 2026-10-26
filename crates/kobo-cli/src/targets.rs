@@ -245,6 +245,7 @@ const ACTS_ON_A_READER: &[ReaderCommand] = &[
     ReaderCommand::sends("parser", &["push"]),
     ReaderCommand::sends("panels", &["push"]),
     ReaderCommand::sends("post", &["login"]),
+    ReaderCommand::sends("drafter", &["login"]),
     ReaderCommand::sends("readlater", &["login"]),
     ReaderCommand::sends("birds", &["listen", "push"]),
     ReaderCommand::sends("feeds", &["push"]),

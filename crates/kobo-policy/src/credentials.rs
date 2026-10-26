@@ -11,6 +11,8 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
+#[path = "drafter_credentials.rs"]
+mod drafter;
 #[path = "miniflux_credentials.rs"]
 mod miniflux;
 #[path = "post_credentials.rs"]
@@ -288,6 +290,8 @@ pub fn allowed_request_with_server(
                 miniflux::allowed(credential, server, url, usage, body, content_type)
             } else if app == "post" {
                 post::allowed(credential, server, url, usage, body, content_type)
+            } else if app == "drafter" {
+                drafter::allowed(credential, server, url, usage, body, content_type)
             } else {
                 servers::allowed(app, credential, server, url, usage)
             }

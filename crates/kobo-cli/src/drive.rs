@@ -195,10 +195,8 @@ impl Driver {
             "tap-id" => self.tap_action_id(rest),
             "maybe-tap-id" => self.maybe_tap_id(rest),
             "tap-paged" => self.tap_paged(rest),
-            "tap-at" => {
-                let (x, y) = parse_point(rest)?;
-                self.touch(x, y)
-            }
+            "tap-at" => parse_point(rest).and_then(|(x, y)| self.touch(x, y)),
+            "hold-at" => parse_point(rest).and_then(|(x, y)| self.hold(x, y)),
             "type" => self.type_text(rest),
             "shot" => self.shot(rest).map(|path| {
                 println!("shot {}", path.display());
@@ -270,6 +268,7 @@ impl Driver {
                 | "maybe-tap-id"
                 | "tap-paged"
                 | "tap-at"
+                | "hold-at"
                 | "type"
                 | "wait-for"
                 | "wait-for-id"
@@ -656,8 +655,18 @@ impl Driver {
     /// work is not awaited here, so the next step can cancel it. Simulators
     /// without callback markers retain the bounded legacy paint wait.
     fn touch(&self, x: i32, y: i32) -> Result<(), String> {
+        self.press("/touch", x, y)
+    }
+
+    /// The same, held still long enough to be a hold rather than a tap: what a
+    /// reader does to select a word.
+    fn hold(&self, x: i32, y: i32) -> Result<(), String> {
+        self.press("/hold", x, y)
+    }
+
+    fn press(&self, route: &str, x: i32, y: i32) -> Result<(), String> {
         let before = self.paints()?;
-        self.post("/touch", &format!("x={x}&y={y}"))?;
+        self.post(route, &format!("x={x}&y={y}"))?;
         let deadline = Instant::now() + APPEAR_TIMEOUT;
         loop {
             let bytes = match self.get("/activity") {

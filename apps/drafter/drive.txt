@@ -1,0 +1,4 @@
+# Run after `kobo drafter login` against a gateway serving a book repository.
+wait-for Drafter
+clean
+shot drafter-sections

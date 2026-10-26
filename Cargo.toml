@@ -64,6 +64,7 @@ members = [
     "apps/calibre-web",
     "apps/crossword",
     "apps/deck",
+    "apps/drafter",
     "apps/fanshelf",
     "apps/fieldbook",
     "apps/flashcards",

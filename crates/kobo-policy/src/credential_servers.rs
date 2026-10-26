@@ -12,6 +12,7 @@ pub fn may_set(app: &str, name: &str) -> bool {
         || (app == "readlater" && name == "wallabag")
         || (app == "readeck" && name == "readeck")
         || (app == "post" && name == "hermes-post")
+        || (app == "drafter" && name == "wu-drafter")
 }
 
 pub(crate) fn path(root: &Path, app: &str, name: &str) -> Option<PathBuf> {

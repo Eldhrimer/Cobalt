@@ -20,6 +20,7 @@ mod console;
 mod deck;
 mod detect;
 mod devsession;
+mod drafter;
 mod drive;
 mod exports;
 mod feeds;
@@ -113,6 +114,7 @@ const STORE_PACKAGES: &[&str] = &[
     "kobo-chat",
     "kobo-crossword",
     "kobo-deck",
+    "kobo-drafter",
     "kobo-fanshelf",
     "kobo-fieldbook",
     "kobo-flashcards",
@@ -961,6 +963,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         "frame" => frame::command(&arguments[1..]),
         "musicstand" => musicstand::command(&arguments[1..]),
         "post" => post::command(&arguments[1..]),
+        "drafter" => drafter::command(&arguments[1..]),
         "readlater" => readlater::command(&arguments[1..]),
         "birds" => birds::command(&arguments[1..]),
         "vault" => vault::command(&arguments[1..]),
@@ -7729,6 +7732,7 @@ fn print_help() {
            deck set PAD ... | ls | show | push  Lay out Deck's pads, then send them\n\
            birds listen --source URL | status | stop  Mirror BirdNET-Go to Birds\n\
            post login --gateway URL --token-file PATH  Sign Post in to a Hermes gateway\n\
+           drafter login --gateway URL --token-file PATH  Sign Drafter in to your book gateway\n\
            readlater login --server URL ...  Sign Read Later in to Wallabag\n\
            sync setup DIR --folder NAME | run | status | stop  Keep a folder in sync\n\
            export --app APP --out DIR  Receive a copy an app prepared for you\n\
@@ -7840,6 +7844,7 @@ mod tests {
             "frame",
             "musicstand",
             "post",
+            "drafter",
             "readlater",
             "birds",
             "vault",
