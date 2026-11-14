@@ -94,6 +94,12 @@ impl Rig {
         self.absorb(commands);
     }
 
+    /// Answers the open text field as the runtime's keyboard would.
+    fn type_text(&mut self, text: &str) {
+        let commands = self.runner.type_text(text);
+        self.absorb(commands);
+    }
+
     fn back(&mut self) {
         let commands = self.runner.action(ActionId::BACK);
         self.absorb(commands);
@@ -276,17 +282,12 @@ fn a_new_install_asks_for_a_gateway_and_a_configured_one_lists_sections() {
 fn the_gateway_address_must_be_https() {
     let mut rig = Rig::standard();
     rig.start();
-    for ch in "http://nope".chars() {
-        let _ = ch;
-    }
-    rig.runner.app_mut().keyboard = Keyboard::with_text("http://nope");
-    let commands = rig.runner.action(action_id("kb.enter"));
-    rig.absorb(commands);
+    rig.act("gateway-url");
+    rig.type_text("http://nope");
     assert_eq!(rig.view(), View::Setup);
     assert!(rig.says("secure https address"));
-    rig.runner.app_mut().keyboard = Keyboard::with_text(GATEWAY);
-    let commands = rig.runner.action(action_id("kb.enter"));
-    rig.absorb(commands);
+    rig.act("gateway-url");
+    rig.type_text(GATEWAY);
     assert_eq!(rig.view(), View::Sections);
     assert_eq!(
         rig.store.get(GATEWAY_KEY).map(Vec::as_slice),
@@ -422,10 +423,7 @@ fn a_custom_ask_takes_a_typed_note() {
     rig.act("w.paragraph");
     rig.act("ask.custom");
     assert_eq!(rig.view(), View::Typing);
-    for key in ["kb.r0c0", "kb.r0c1"] {
-        rig.act(key);
-    }
-    rig.act("kb.enter");
+    rig.type_text("ab");
     assert_eq!(rig.view(), View::Reading);
     let Op::Mark { ask, note, .. } = &rig.app().ops[0] else {
         panic!("mark")
@@ -536,15 +534,13 @@ fn typed_blocks_come_from_the_outline_menu() {
     rig.act("om.0");
     rig.act("ov.add");
     assert_eq!(rig.view(), View::Typing);
-    rig.act("kb.r0c0");
-    rig.act("kb.enter");
+    rig.type_text("a");
     assert_eq!(rig.view(), View::Outline);
     assert_eq!(rig.app().work.blocks.len(), 8);
     assert_eq!(rig.app().work.blocks[1].id, "d1");
     rig.act("om.0");
     rig.act("ov.want");
-    rig.act("kb.r0c0");
-    rig.act("kb.enter");
+    rig.type_text("a");
     assert!(matches!(rig.app().ops.last(), Some(Op::Want { after: Some(a), .. }) if a == "p1"));
 }
 
@@ -667,6 +663,9 @@ fn choosing_and_committing_sends_decisions_and_clears_the_queue() {
         r#"{"status":"committed","sha":"abc1234567","file":"x"}"#,
     );
     assert_eq!(rig.view(), View::Reading);
+    assert!(rig.says("Committed abc1234567 to GitHub."));
+    // The list refresh the commit started must not wipe the confirmation.
+    rig.answer("/sections", LIST);
     assert!(rig.says("Committed abc1234567 to GitHub."));
     assert!(rig.app().ops.is_empty());
     assert!(rig.app().inflight.is_none());

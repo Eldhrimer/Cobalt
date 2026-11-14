@@ -17,7 +17,7 @@ mod views;
 mod wire;
 
 use kobo_json::{ObjectBuilder, Value};
-use kobo_sdk::keyboard::{Keyboard, Pressed, TextEntry, Typing};
+use kobo_sdk::keyboard::{TextEntry, Typing};
 use kobo_sdk::{
     action_id, ActionId, Context, Failure, Heartbeat, KoboApp, Screen, ScreenBuilder, StoreResult,
     TaskError, TaskId, TaskOutcome,
@@ -142,7 +142,10 @@ impl Inflight {
 pub struct Drafter {
     pub(crate) view: View,
     pub(crate) gateway: String,
-    pub(crate) keyboard: Keyboard,
+    /// The gateway address, typed on the runtime's keyboard.
+    pub(crate) address: TextEntry,
+    /// What the setup field shows between entries.
+    pub(crate) address_text: String,
     pub(crate) entry: TextEntry,
     pub(crate) typing: Option<Typed>,
     pub(crate) typing_return: View,
@@ -1008,27 +1011,40 @@ impl Drafter {
         self.show(c);
     }
 
-    fn setup_key(&mut self, c: &mut Context, a: ActionId) -> bool {
-        let Some(key) = self.keyboard.press(a) else {
-            return false;
-        };
-        if matches!(key, Pressed::Submitted) {
-            let text = self.keyboard.text().trim().to_owned();
-            if text.starts_with("https://") {
-                self.gateway = text;
-                c.store()
-                    .save(GATEWAY_KEY, self.gateway.clone().into_bytes());
-                self.keyboard.clear();
-                self.notice = None;
-                self.view = View::Sections;
+    /// The gateway field on setup: tapping it opens the runtime's keyboard, and
+    /// its answer is the address. True when `a` belonged to the field.
+    fn setup_action(&mut self, c: &mut Context, a: ActionId) -> bool {
+        if let Some(typing) = self.address.handle(a) {
+            if let Typing::Submitted(text) = typing {
+                self.submit_gateway(c, text.trim());
+            } else {
                 self.show(c);
-                self.check_list(c);
-                return true;
             }
-            self.notice = Some("Enter the secure https address of your gateway.".into());
+            return true;
         }
-        self.show(c);
-        true
+        if is(a, views::GATEWAY_URL) {
+            self.address = TextEntry::new().address();
+            self.address.open_with(self.address_text.clone());
+            self.show(c);
+            return true;
+        }
+        false
+    }
+
+    fn submit_gateway(&mut self, c: &mut Context, text: &str) {
+        text.clone_into(&mut self.address_text);
+        if text.starts_with("https://") {
+            text.clone_into(&mut self.gateway);
+            c.store()
+                .save(GATEWAY_KEY, self.gateway.clone().into_bytes());
+            self.notice = None;
+            self.view = View::Sections;
+            self.show(c);
+            self.check_list(c);
+        } else {
+            self.notice = Some("Enter the secure https address of your gateway.".into());
+            self.show(c);
+        }
     }
 }
 
@@ -1077,7 +1093,7 @@ impl KoboApp for Drafter {
             // four start-up reads: the app can now say where it is.
             if self.view == View::Opening && self.opening.is_none() {
                 self.view = if self.gateway.is_empty() {
-                    self.keyboard = Keyboard::with_text("https://");
+                    "https://".clone_into(&mut self.address_text);
                     View::Setup
                 } else {
                     View::Sections
@@ -1101,13 +1117,13 @@ impl KoboApp for Drafter {
             match self.entry.handle(a) {
                 Some(Typing::Submitted(text)) => self.typed(c, text),
                 Some(Typing::Cancelled) => self.go_back(c),
-                Some(Typing::Changed) => self.show(c),
+                Some(Typing::Changed | Typing::Saved | Typing::Refused(_)) => self.show(c),
                 None if a == ActionId::BACK => self.go_back(c),
                 None => {}
             }
             return;
         }
-        if self.view == View::Setup && self.setup_key(c, a) {
+        if self.view == View::Setup && self.setup_action(c, a) {
             return;
         }
         if a == ActionId::BACK {
@@ -1219,27 +1235,34 @@ impl Drafter {
     }
 
     fn list_outcome(&mut self, c: &mut Context, out: TaskOutcome) {
+        // The list refreshes in the background after a commit or a send; its
+        // news belongs to the section list, and must not replace whatever the
+        // screen in front of the reader is saying.
+        let listing = self.view == View::Sections;
         match out {
             TaskOutcome::Completed(bytes) => match wire::section_list(&bytes) {
                 Some(list) => {
                     self.list = list;
-                    self.notice = None;
+                    if listing {
+                        self.notice = None;
+                    }
                     c.store().save(LIST_KEY, bytes);
                 }
-                None => {
+                None if listing => {
                     self.notice =
                         Some("The gateway answered with something other than sections.".into());
                 }
+                None => {}
             },
-            TaskOutcome::Failed(error) => {
+            TaskOutcome::Failed(error) if listing => {
                 self.notice = Some(format!(
                     "{} The saved list is still here.",
                     Self::fail_text(error)
                 ));
             }
-            TaskOutcome::Cancelled => {}
+            TaskOutcome::Failed(_) | TaskOutcome::Cancelled => {}
         }
-        if self.view == View::Sections {
+        if listing {
             self.show(c);
         }
     }
@@ -1276,7 +1299,7 @@ impl Drafter {
             self.check_list(c);
             self.show(c);
         } else if is(a, GATEWAY) {
-            self.keyboard = Keyboard::with_text(self.gateway.clone());
+            self.address_text = self.gateway.clone();
             self.view = View::Setup;
             self.show(c);
         } else if is(a, PREV) || is(a, NEXT) {

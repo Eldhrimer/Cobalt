@@ -1054,8 +1054,8 @@ mod tests {
                 .unwrap()
                 .iter()
                 .map(|m| {
-                    let get = |k: &str| m.get(k).unwrap().as_str().unwrap().to_owned();
-                    (get("block"), get("excerpt"), get("ask"))
+                    let field = |k: &str| m.get(k).unwrap().as_str().unwrap().to_owned();
+                    (field("block"), field("excerpt"), field("ask"))
                 })
                 .collect();
             assert_eq!(marks, wanted, "{name}: marks differ");

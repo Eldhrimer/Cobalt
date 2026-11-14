@@ -19,6 +19,7 @@ use kobo_sdk::{BannerLevel, Chrome, Context, Glyph, Screen, ScreenBuilder, Space
 
 // Action names. One place, so a typo is a compile error rather than a dead button.
 pub const HOLD: &str = "hold";
+pub const GATEWAY_URL: &str = "gateway-url";
 pub const PREV: &str = "prev-page";
 pub const NEXT: &str = "next-page";
 pub const MORE: &str = "more";
@@ -71,6 +72,12 @@ impl Drafter {
     // --------------------------------------------------------------- setup
 
     pub(crate) fn setup_screen(&self) -> Screen {
+        if self.address.is_open() {
+            return ScreenBuilder::new("drafter-setup")
+                .top_bar("Drafter")
+                .text_entry(&self.address, "Gateway address", "Save gateway")
+                .build();
+        }
         let mut s = ScreenBuilder::new("drafter-setup")
             .top_bar("Drafter")
             .section("Connect a gateway")
@@ -82,11 +89,10 @@ impl Drafter {
             s = s.banner(BannerLevel::Attention, notice);
         }
         s.field(
-            "gateway-url",
-            self.keyboard.text(),
+            GATEWAY_URL,
+            &self.address_text,
             "https://drafter.example.net",
         )
-        .keyboard(&self.keyboard, "Save gateway")
         .build()
     }
 

@@ -646,8 +646,8 @@ mod tests {
         );
         let heads: Vec<_> = pages
             .iter()
-            .map(|p| match p[0] {
-                Item::Text { from, .. } => &text[from..from + 5],
+            .map(|p| match p.first() {
+                Some(Item::Text { from, .. }) => &text[*from..*from + 5],
                 _ => "",
             })
             .collect();

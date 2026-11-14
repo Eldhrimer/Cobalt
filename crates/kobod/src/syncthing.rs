@@ -15,6 +15,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const APP_STATE: &str = "/mnt/onboard/.adds/cobalt/state/syncthing";
 const HOME: &str = "/var/lib/cobalt/syncthing";
+/// Left in the engine's home by a session that is ending, so the window it
+/// started, running in a process of its own, ends with it.
+const STOP: &str = "stop-window";
 const ENGINE: &str = "/mnt/onboard/.adds/cobalt/bin/syncthing";
 const ENGINE_SHA256: &str = "e7e0523d8db0328b22ebff5c98bd721c94e295122771c0538414898a06ef8ebf";
 
@@ -35,6 +38,14 @@ const FRAME_DATA: &str = "/mnt/onboard/.adds/cobalt/data/frame";
 const MAX_WINDOW: Duration = Duration::from_secs(5 * 60);
 const TAIL_WINDOW: Duration = Duration::from_secs(90);
 const POLL: Duration = Duration::from_secs(2);
+
+/// What the Sync app saves when the owner asks for a sync now. Its presence is
+/// the whole request; the window that answers it removes it.
+const REQUEST: &str = "sync-request";
+/// When the last window began, whatever became of it. The schedule counts from
+/// here rather than from the last success, so a computer that is switched off
+/// costs one attempt per interval instead of one every time the runtime looks.
+const LAST_ATTEMPT: &str = "sync-last-attempt";
 
 const FOLDERS: [(&str, &str); 4] = [
     ("vault", "receiveonly"),
@@ -96,7 +107,7 @@ impl Settings {
     }
 }
 
-/// `kobod --syncthing id|pair DEVICE_ID FOLDER|status|window [seconds]|tail|scheduled|stop`.
+/// `kobod --syncthing id|pair DEVICE_ID FOLDER|status|window [seconds]|tail|scheduled|now|stop`.
 pub fn command(arguments: &[String]) -> Result<(), String> {
     let state = Path::new(APP_STATE);
     match arguments {
@@ -127,6 +138,7 @@ pub fn command(arguments: &[String]) -> Result<(), String> {
         }
         [action] if action == "tail" => run_window(state, TAIL_WINDOW, "tail"),
         [action] if action == "scheduled" => run_window(state, MAX_WINDOW, "scheduled"),
+        [action] if action == "now" => run_window(state, MAX_WINDOW, "owner"),
         [action, seconds] if action == "window" => {
             let seconds = seconds
                 .parse::<u64>()
@@ -138,10 +150,132 @@ pub fn command(arguments: &[String]) -> Result<(), String> {
             )
         }
         _ => Err(
-            "usage: kobod --syncthing id|pair DEVICE_ID vault|frame|books|out|status|stop|tail|scheduled|window SECONDS"
+            "usage: kobod --syncthing id|pair DEVICE_ID vault|frame|books|out|status|stop|tail|scheduled|now|window SECONDS"
                 .to_owned(),
         ),
     }
+}
+
+/// Why the runtime should start a window now, if it should.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Due {
+    /// The owner tapped Sync now, or turned Sync on.
+    Owner,
+    /// The schedule the owner chose has come round.
+    Scheduled,
+}
+
+impl Due {
+    /// The `kobod` arguments that run this window in a process of its own.
+    ///
+    /// A process rather than a thread, because a window outlives the session
+    /// that started it: the reader may hand back to the stock reader a minute
+    /// into a five minute sync, and a thread would die with the runtime and
+    /// leave the engine running with nobody to stop it.
+    pub const fn arguments(self) -> [&'static str; 2] {
+        match self {
+            Self::Owner => ["--syncthing", "now"],
+            Self::Scheduled => ["--syncthing", "scheduled"],
+        }
+    }
+}
+
+/// Asks the window this session started to stop, because the session is
+/// ending.
+///
+/// A window used to outlive its session on purpose, so a sync begun a minute
+/// before the owner left could finish. What it finished into was a card the
+/// stock reader had just started scanning, a single core the stock reader
+/// needed to start, and a radio the session was about to release. Plugged
+/// into a computer in those five minutes, the reader handed its card over
+/// with the engine still writing to it. So a window ends with its session,
+/// and the sync carries on the next time Cobalt opens.
+///
+/// # Errors
+///
+/// When the request cannot be written; the session then ends the window
+/// itself once it has waited.
+pub fn ask_window_to_stop() -> std::io::Result<()> {
+    fs::write(Path::new(HOME).join(STOP), b"")
+}
+
+/// Puts back a sync whose window the session had to end before it could do
+/// so itself, so it runs again at the next session.
+///
+/// # Errors
+///
+/// When the app's state cannot be written.
+pub fn put_back(due: Due) -> Result<(), String> {
+    let reason = match due {
+        Due::Owner => "owner",
+        Due::Scheduled => "scheduled",
+    };
+    stopped_with_the_session(Path::new(APP_STATE), Path::new(HOME), reason)
+}
+
+/// Clears a request left by a session that ended before its window saw it,
+/// so the next window is not stopped by it as it starts.
+pub fn forget_stop_request() {
+    let _ignored = fs::remove_file(Path::new(HOME).join(STOP));
+}
+
+/// Whether a window is due, read from what the Sync app and earlier windows
+/// left in the app's state.
+///
+/// Nothing on the reader wakes it from sleep yet, so this is asked while
+/// Cobalt is open. An owner's request comes first. A schedule is due once its
+/// interval has passed since the last attempt, or straight away if there has
+/// never been one, so turning Sync on with a schedule starts a sync at once.
+pub fn due() -> Option<Due> {
+    due_in(Path::new(APP_STATE), epoch_now())
+}
+
+fn due_in(app_state: &Path, now: u64) -> Option<Due> {
+    let settings = Settings::load(app_state).ok()?;
+    if !settings.enabled {
+        return None;
+    }
+    if app_state.join(REQUEST).is_file() {
+        return Some(Due::Owner);
+    }
+    let interval = u64::from(settings.cadence.seconds()?);
+    let last = read_epoch(app_state, LAST_ATTEMPT);
+    (last == 0 || now >= last.saturating_add(interval)).then_some(Due::Scheduled)
+}
+
+/// Whether a store key the Sync app just saved may have made a window due.
+///
+/// The runtime looks at the schedule once a minute. These two are looked at
+/// at once, because they are taps: Sync now, and Sync turned on or its
+/// schedule changed.
+pub fn asks_for_a_window(key: &str) -> bool {
+    key == REQUEST || key == "sync-config"
+}
+
+/// Tells the Sync app why the sync it asked for has not started.
+///
+/// The request is kept, so the sync starts by itself once the reader is on
+/// Wi-Fi. Written once rather than every time the runtime looks, because each
+/// write wakes the app to show the same thing again.
+pub fn waiting_for_wifi() {
+    let app_state = Path::new(APP_STATE);
+    if read_status(app_state).lines().next() == Some("offline") {
+        return;
+    }
+    let _ignored = write_status(
+        app_state,
+        &Status::quiet(
+            "offline",
+            "Sync is waiting for Wi-Fi. It starts by itself when the reader is online.",
+        ),
+    );
+}
+
+fn read_epoch(app_state: &Path, name: &str) -> u64 {
+    fs::read_to_string(app_state.join(name))
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 fn run_window(app_state: &Path, requested: Duration, reason: &str) -> Result<(), String> {
@@ -151,11 +285,24 @@ fn run_window(app_state: &Path, requested: Duration, reason: &str) -> Result<(),
         return Ok(());
     }
     if !window_is_due(&settings, reason) {
-        write_status(app_state, &Status::quiet("waiting", "Manual sync only."))?;
+        write_status(
+            app_state,
+            &Status::quiet("waiting", "Sync runs only when you tap Sync now."),
+        )?;
         return Ok(());
     }
     let home = Path::new(HOME);
-    prepare(home)?;
+    if !begin_window(app_state, home)? {
+        return Ok(());
+    }
+    if let Err(detail) = prepare(home) {
+        write_status(app_state, &Status::quiet("failed", detail))?;
+        return Ok(());
+    }
+    // Fetching the engine can take most of a short session.
+    if home.join(STOP).exists() {
+        return stopped_with_the_session(app_state, home, reason);
+    }
     let mut child = match start(home) {
         Ok(child) => child,
         Err(detail) => {
@@ -168,10 +315,15 @@ fn run_window(app_state: &Path, requested: Duration, reason: &str) -> Result<(),
     let key = fs::read_to_string(home.join("api-key"))
         .map_err(|error| format!("read Sync REST key: {error}"))?;
     let peers = read_peers(home)?;
+    let mut reached = 0;
     loop {
+        if home.join(STOP).exists() {
+            stop(&mut child, &key);
+            return stopped_with_the_session(app_state, home, reason);
+        }
         if !Settings::load(app_state)?.enabled {
             stop(&mut child, &key);
-            write_status(app_state, &Status::quiet("paused", "Paused by the owner."))?;
+            write_status(app_state, &Status::quiet("paused", "Sync was turned off."))?;
             return Ok(());
         }
         if child
@@ -183,7 +335,7 @@ fn run_window(app_state: &Path, requested: Duration, reason: &str) -> Result<(),
                 app_state,
                 &Status::quiet(
                     "failed",
-                    "Sync engine stopped. Install the platform update again.",
+                    "The sync engine stopped unexpectedly. Tap Sync now to try again.",
                 ),
             )?;
             return Ok(());
@@ -200,6 +352,7 @@ fn run_window(app_state: &Path, requested: Duration, reason: &str) -> Result<(),
                 return Ok(());
             }
             Ok(progress) => {
+                reached = reached.max(progress.online);
                 write_status(
                     app_state,
                     &Status {
@@ -215,13 +368,84 @@ fn run_window(app_state: &Path, requested: Duration, reason: &str) -> Result<(),
         }
         if Instant::now() >= deadline {
             stop(&mut child, &key);
-            write_status(
-                app_state,
-                &Status::quiet("timed-out", "Sync window ended after five minutes."),
-            )?;
+            write_status(app_state, &timed_out(reached))?;
             return Ok(());
         }
         std::thread::sleep(POLL);
+    }
+}
+
+/// Puts a sync its session stopped back to be run again, and says so.
+///
+/// The attempt is taken back, so the next session syncs as soon as it is on
+/// Wi-Fi instead of waiting out the schedule for a sync that never finished,
+/// and a Sync now tap is asked for again. The engine picks up where it
+/// stopped, so a library too large for one session still gets there.
+fn stopped_with_the_session(app_state: &Path, home: &Path, reason: &str) -> Result<(), String> {
+    let _ignored = fs::remove_file(home.join(STOP));
+    match fs::remove_file(app_state.join(LAST_ATTEMPT)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("take back the Sync attempt: {error}")),
+    }
+    if reason == "owner" {
+        atomic_write(&app_state.join(REQUEST), &epoch_now().to_string(), 0o600)?;
+    }
+    write_status(
+        app_state,
+        &Status::quiet(
+            "stopped",
+            "Sync stopped when you left Cobalt. It carries on the next time you open Cobalt.",
+        ),
+    )
+}
+
+/// Records the attempt and answers the request, and says whether there is
+/// anybody to sync with.
+///
+/// The attempt is recorded before anything can fail, so a sync that cannot
+/// start is not retried every minute: it waits for the next interval or the
+/// next tap. Without a paired computer the answer is no, because five minutes
+/// of radio, or a 28 MB engine download, would buy nothing.
+fn begin_window(app_state: &Path, home: &Path) -> Result<bool, String> {
+    atomic_write(
+        &app_state.join(LAST_ATTEMPT),
+        &epoch_now().to_string(),
+        0o600,
+    )?;
+    match fs::remove_file(app_state.join(REQUEST)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("clear the Sync request: {error}")),
+    }
+    if read_peers(home)?.is_empty() {
+        write_status(
+            app_state,
+            &Status::quiet(
+                "unpaired",
+                "No computer is set up for Sync yet. On the computer, run kobo sync setup.",
+            ),
+        )?;
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Why a sync that ran out of time did not finish, which is one of two very
+/// different things with different fixes.
+fn timed_out(reached: usize) -> Status {
+    Status {
+        peers: reached,
+        ..Status::quiet(
+            "timed-out",
+            if reached == 0 {
+                "The computer was not found. Run kobo sync run on it, keep both on the same \
+                 network, then tap Sync now."
+            } else {
+                "Sync stopped after five minutes with files still to move. The rest move \
+                 next time."
+            },
+        )
     }
 }
 
@@ -232,6 +456,11 @@ fn window_is_due(settings: &Settings, reason: &str) -> bool {
 }
 
 fn initialize(home: &Path) -> Result<(), String> {
+    // Fetched here, not only when a window starts: this is the first thing
+    // `kobo sync setup` asks of the reader, and verifying an engine that has
+    // never been downloaded failed every setup on a reader that had not
+    // synced before.
+    ensure_engine(Path::new(ENGINE))?;
     verify_engine(Path::new(ENGINE))?;
     fs::create_dir_all(home).map_err(|error| format!("create Sync state: {error}"))?;
     fs::set_permissions(home, fs::Permissions::from_mode(0o700))
@@ -432,7 +661,6 @@ fn atomic_write(path: &Path, value: &str, mode: u32) -> Result<(), String> {
 }
 
 fn start(home: &Path) -> Result<Child, String> {
-    ensure_engine(Path::new(ENGINE))?;
     verify_engine(Path::new(ENGINE))?;
     Command::new(ENGINE)
         .arg("--home")
@@ -554,7 +782,7 @@ fn conflict_window(app_state: &Path, progress: &WindowProgress) -> Result<(), St
             state: "conflict",
             bytes: 0,
             message: format!(
-                "{} file(s) could not sync. They retry on the next window.",
+                "{} file(s) could not sync. Sync tries them again next time.",
                 progress.conflicts
             ),
             peers: progress.online,
@@ -568,14 +796,14 @@ fn complete_window(app_state: &Path, progress: &WindowProgress) -> Result<(), St
     record_success(app_state, now)?;
     let ingest_note = match ingest(app_state, now) {
         Ok(note) => note,
-        Err(detail) => format!(" Import needs attention: {detail}"),
+        Err(detail) => format!(" Some files were not imported: {detail}."),
     };
     write_status(
         app_state,
         &Status {
             state: "idle",
             bytes: 0,
-            message: format!("Last sync: complete.{ingest_note}"),
+            message: format!("Sync finished.{ingest_note}"),
             peers: progress.online,
             conflicts: 0,
         },
@@ -826,7 +1054,11 @@ fn ingest(app_state: &Path, epoch: u64) -> Result<String, String> {
         {
             record_ingest(app_state, folder, files, bytes, epoch)?;
             atomic_write(&digest_path, &digest, 0o600)?;
-            let _ignored = write!(note, " {folder}: {files} files imported.");
+            let _ignored = write!(
+                note,
+                " {}: {files} files imported.",
+                if folder == "vault" { "Vault" } else { "Frame" }
+            );
         }
     }
     Ok(note)
@@ -977,7 +1209,7 @@ fn atomic_bytes(path: &Path, value: &[u8], mode: u32) -> Result<(), String> {
 
 fn read_status(root: &Path) -> String {
     fs::read_to_string(root.join("sync-status"))
-        .unwrap_or_else(|_| "disabled\n0\nSync has not run.".to_owned())
+        .unwrap_or_else(|_| "\n0\nSync has not run yet.".to_owned())
 }
 
 #[cfg(test)]
@@ -1054,6 +1286,100 @@ mod tests {
             ..manual
         };
         assert!(!window_is_due(&paused, "tail"));
+    }
+
+    #[test]
+    fn a_window_is_due_when_the_owner_asks_or_the_schedule_comes_round() {
+        let state =
+            std::env::temp_dir().join(format!("cobalt-sync-due-test-{}", std::process::id()));
+        let _ignored = fs::remove_dir_all(&state);
+        fs::create_dir_all(&state).expect("state");
+        let now = 1_790_000_000;
+        // Never set up: nothing is due and nothing is guessed.
+        assert_eq!(due_in(&state, now), None);
+        fs::write(state.join("sync-config"), "true\n0").expect("manual");
+        assert_eq!(due_in(&state, now), None, "manual only waits for a tap");
+        fs::write(state.join(REQUEST), now.to_string()).expect("tap");
+        assert_eq!(due_in(&state, now), Some(Due::Owner));
+        fs::write(state.join("sync-config"), "false\n1").expect("off");
+        assert_eq!(
+            due_in(&state, now),
+            None,
+            "a request never overrides Sync off"
+        );
+        fs::remove_file(state.join(REQUEST)).expect("answered");
+        fs::write(state.join("sync-config"), "true\n1").expect("hourly");
+        assert_eq!(
+            due_in(&state, now),
+            Some(Due::Scheduled),
+            "a schedule with no attempt yet syncs at once"
+        );
+        fs::write(state.join(LAST_ATTEMPT), (now - 600).to_string()).expect("attempt");
+        assert_eq!(due_in(&state, now), None);
+        fs::write(state.join(LAST_ATTEMPT), (now - 3600).to_string()).expect("attempt");
+        assert_eq!(due_in(&state, now), Some(Due::Scheduled));
+        assert!(asks_for_a_window(REQUEST) && asks_for_a_window("sync-config"));
+        assert!(!asks_for_a_window("sync-meta"));
+        let _ignored = fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_sync_stopped_with_its_session_is_due_again_at_the_next() {
+        let root =
+            std::env::temp_dir().join(format!("cobalt-sync-stop-test-{}", std::process::id()));
+        let _ignored = fs::remove_dir_all(&root);
+        let state = root.join("state");
+        let home = root.join("home");
+        fs::create_dir_all(&state).expect("state");
+        fs::create_dir_all(&home).expect("home");
+        let now = epoch_now();
+
+        // A scheduled sync: the attempt it recorded is taken back.
+        fs::write(state.join("sync-config"), "true\n1").expect("hourly");
+        fs::write(state.join(LAST_ATTEMPT), now.to_string()).expect("attempt");
+        fs::write(home.join(STOP), b"").expect("the session asked");
+        assert_eq!(
+            due_in(&state, now),
+            None,
+            "the attempt holds the schedule off"
+        );
+        stopped_with_the_session(&state, &home, "scheduled").expect("stopped");
+        assert_eq!(due_in(&state, now), Some(Due::Scheduled));
+        assert!(!home.join(STOP).exists(), "the request was answered");
+        assert!(read_status(&state).starts_with("stopped"));
+
+        // A Sync now tap on a manual schedule: the tap is asked for again.
+        fs::write(state.join("sync-config"), "true\n0").expect("manual");
+        stopped_with_the_session(&state, &home, "owner").expect("stopped");
+        assert_eq!(due_in(&state, now), Some(Due::Owner));
+        let _ignored = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_sync_that_runs_out_of_time_says_which_of_two_things_went_wrong() {
+        let unreached = timed_out(0);
+        assert_eq!(unreached.state, "timed-out");
+        assert!(
+            unreached.message.contains("kobo sync run"),
+            "{}",
+            unreached.message
+        );
+        let partial = timed_out(1);
+        assert_eq!(partial.peers, 1);
+        assert!(
+            partial.message.contains("still to move"),
+            "{}",
+            partial.message
+        );
+        for status in [unreached, partial] {
+            assert!(!status.message.contains("window"), "{}", status.message);
+        }
+    }
+
+    #[test]
+    fn each_window_runs_in_the_runtime_as_a_command_it_already_understands() {
+        assert_eq!(Due::Owner.arguments(), ["--syncthing", "now"]);
+        assert_eq!(Due::Scheduled.arguments(), ["--syncthing", "scheduled"]);
     }
 
     #[test]

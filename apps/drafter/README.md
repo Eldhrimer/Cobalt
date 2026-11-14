@@ -80,7 +80,7 @@ replay; their results must match byte for byte.
 
 Only a bearer-token gateway reachable over HTTPS is supported. There is no
 drag and drop: the touch SDK has no drag gesture, so blocks move by pick up and
-place. Text is retyped through the on-screen keyboard from a block's row menu,
+place. Text is retyped on the reader's keyboard from a block's row menu,
 not inline.
 
 ## Permissions

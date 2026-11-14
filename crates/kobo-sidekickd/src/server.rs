@@ -42,6 +42,14 @@ const READ_PATIENCE: Duration = Duration::from_secs(10);
 /// back.
 const WRITE_PATIENCE: Duration = Duration::from_secs(30);
 
+/// How long since the reader was last in touch before it counts as gone.
+///
+/// Sidekick asks every few seconds while it is open and naps ten seconds
+/// after a failed request, so a minute of silence is a reader that is
+/// closed, asleep or out of range. A question asked then goes straight back
+/// to the terminal instead of holding the agent for five minutes.
+const READER_FRESH: Duration = Duration::from_secs(60);
+
 /// Loads the identity and serves until killed.
 ///
 /// # Errors
@@ -78,16 +86,17 @@ fn run_mode(sample: bool) -> Result<(), String> {
     let tls = kobo_net::serve::TlsServer::from_pem(&identity.certificate, &identity.key)?;
     let board = Arc::new(Board::new());
     let deck = (!sample).then(|| Deck::new(directory.join("deck.toml"), home));
+    let (hook_port, reader_port) = state::ports();
     let hooks = if sample {
         None
     } else {
         Some(
-            TcpListener::bind(("127.0.0.1", state::HOOK_PORT))
-                .map_err(|error| format!("bind 127.0.0.1:{}: {error}", state::HOOK_PORT))?,
+            TcpListener::bind(("127.0.0.1", hook_port))
+                .map_err(|error| format!("bind 127.0.0.1:{hook_port}: {error}"))?,
         )
     };
-    let reader = TcpListener::bind(("0.0.0.0", state::READER_PORT))
-        .map_err(|error| format!("bind 0.0.0.0:{}: {error}", state::READER_PORT))?;
+    let reader = TcpListener::bind(("0.0.0.0", reader_port))
+        .map_err(|error| format!("bind 0.0.0.0:{reader_port}: {error}"))?;
     if sample {
         println!("Sidekick sample is ready. Open Sidekick on your reader and choose Received.\nNo agent integration is required. This sample cannot run commands.\nPress Ctrl-C to stop.");
         let sample_board = Arc::clone(&board);
@@ -100,11 +109,7 @@ fn run_mode(sample: bool) -> Result<(), String> {
             }
         });
     } else {
-        println!(
-            "sidekick: hooks on 127.0.0.1:{}, reader on 0.0.0.0:{} (TLS)",
-            state::HOOK_PORT,
-            state::READER_PORT
-        );
+        println!("sidekick: hooks on 127.0.0.1:{hook_port}, reader on 0.0.0.0:{reader_port} (TLS)");
     }
     let hook_board = Arc::clone(&board);
     std::thread::spawn(move || {
@@ -139,8 +144,19 @@ fn run_mode(sample: bool) -> Result<(), String> {
             let _seat = seat;
             let _ = stream.set_read_timeout(Some(READ_PATIENCE));
             let _ = stream.set_write_timeout(Some(WRITE_PATIENCE));
+            let peer = stream.peer_addr().ok().map(|address| address.ip());
             if let Ok(mut stream) = tls.accept(stream) {
                 if let Ok(request) = read_request(&mut stream) {
+                    if let (Some(peer), "/articles/sync") = (peer, request.path()) {
+                        articles_route_with(
+                            &pairing,
+                            peer,
+                            &request,
+                            &mut stream,
+                            articles_answer(sample),
+                        );
+                        return;
+                    }
                     reader_route_inner(&board, deck.as_ref(), &pairing, &request, &mut stream);
                 }
             }
@@ -184,7 +200,23 @@ impl Drop for Seat {
 }
 
 /// `POST /ask` from a hook: put the question up, wait for the person.
+/// `GET /status` says whether a reader is in touch, for `kobo sidekick`.
 fn hook_route(board: &Board, request: &Request, stream: &mut (impl Read + Write)) {
+    if request.method == "GET" && request.path() == "/status" {
+        let mut reply = kobo_json::ObjectBuilder::new();
+        if let Some(quiet) = board.reader_quiet_for() {
+            reply = reply
+                .set(
+                    "reader_quiet_seconds",
+                    u32::try_from(quiet.as_secs()).unwrap_or(u32::MAX),
+                )
+                .set("reader_watching", quiet < READER_FRESH);
+        } else {
+            reply = reply.set("reader_watching", false);
+        }
+        respond_json(stream, 200, "OK", &reply.build().to_json());
+        return;
+    }
     if request.method != "POST" || request.path() != "/ask" {
         respond_json(stream, 404, "Not Found", "{}");
         return;
@@ -208,7 +240,14 @@ fn hook_route(board: &Board, request: &Request, stream: &mut (impl Read + Write)
         let multi = ask.get("multi").and_then(kobo_json::Value::as_bool) == Some(true);
         asking = asking.multiple_choice(multi);
     }
-    let reply = match board.submit(asking, state::ASK_PATIENCE) {
+    // A test from the companion waits for the owner to open Sidekick; an
+    // agent's own prompt does not, because the owner is at the terminal.
+    let waits_for_reader = ask
+        .get("wait_for_reader")
+        .and_then(kobo_json::Value::as_bool)
+        == Some(true);
+    let fresh = (!waits_for_reader).then_some(READER_FRESH);
+    let reply = match board.submit_watched(asking, state::ASK_PATIENCE, fresh) {
         Decision::Allow => plain("allow"),
         Decision::Deny => plain("deny"),
         Decision::Pass => plain("pass"),
@@ -291,6 +330,7 @@ fn reader_route_inner(
                 respond_json(stream, 403, "Forbidden", "{}");
                 return;
             }
+            board.reader_seen();
             if request.query("all") == Some("true") {
                 let (version, asks) = board.snapshot();
                 let reply = kobo_json::ObjectBuilder::new()
@@ -329,6 +369,7 @@ fn reader_route_inner(
                 respond_json(stream, 403, "Forbidden", "{}");
                 return;
             }
+            board.reader_seen();
             let id = answer.get("id").and_then(kobo_json::Value::as_i64);
             // Chosen options arrive under their own name, so a question
             // offering a choice called "allow" still means the choice.
@@ -362,6 +403,45 @@ fn reader_route_inner(
         }
         _ => respond_json(stream, 404, "Not Found", "{}"),
     }
+}
+
+/// What answers `POST /articles/sync` from Books: sending what is waiting
+/// here to the reader that asked, behind the same code as everything else.
+///
+/// Not in the sample, which promises to run nothing. Books asks on its own
+/// each time it opens, so a sample that synced would empty the owner's
+/// queue without anyone choosing Sync.
+fn articles_answer(sample: bool) -> fn(std::net::IpAddr) -> String {
+    if sample {
+        |_| crate::articles::not_in_the_sample()
+    } else {
+        crate::articles::sync_for
+    }
+}
+
+fn articles_route_with(
+    pairing: &str,
+    peer: std::net::IpAddr,
+    request: &Request,
+    stream: &mut (impl Read + Write),
+    sync: impl FnOnce(std::net::IpAddr) -> String,
+) {
+    if request.method != "POST" {
+        respond_json(stream, 404, "Not Found", "{}");
+        return;
+    }
+    let body = String::from_utf8_lossy(&request.body);
+    let token = kobo_json::parse(&body).ok().and_then(|value| {
+        value
+            .get("token")
+            .and_then(kobo_json::Value::as_str)
+            .map(str::to_owned)
+    });
+    if token.as_deref() != Some(pairing) {
+        respond_json(stream, 403, "Forbidden", "{}");
+        return;
+    }
+    respond_json(stream, 200, "OK", &sync(peer));
 }
 
 fn deck_route(
@@ -459,7 +539,9 @@ fn ask_json(ask: &Ask) -> kobo_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{hook_route, reader_route, reader_route_with_deck};
+    use super::{
+        articles_answer, articles_route_with, hook_route, reader_route, reader_route_with_deck,
+    };
     use crate::board::{Board, Decision};
     use crate::deck::Deck;
     use crate::http::Request;
@@ -517,8 +599,66 @@ mod tests {
     }
 
     #[test]
+    fn the_sample_answers_sync_without_running_the_companion() {
+        // A companion that ran would empty the owner's queue; the sample's
+        // answer is a sentence, made here, with nothing started.
+        let answer = articles_answer(true)("192.168.1.40".parse().expect("an address"));
+        let value = kobo_json::parse(&answer).expect("json");
+        assert_eq!(
+            value.get("delivered").and_then(kobo_json::Value::as_i64),
+            Some(0)
+        );
+        assert!(value
+            .get("problem")
+            .and_then(kobo_json::Value::as_str)
+            .is_some_and(|problem| problem.contains("sample")));
+    }
+
+    #[test]
+    fn articles_are_synced_back_to_the_reader_that_asked_and_only_with_the_code() {
+        let peer: std::net::IpAddr = "192.168.1.40".parse().expect("an address");
+        let mut wire = Cursor::new(Vec::new());
+        articles_route_with(
+            "code",
+            peer,
+            &post("/articles/sync", r#"{"token":"wrong"}"#),
+            &mut wire,
+            |_| panic!("a wrong code reached the companion"),
+        );
+        assert!(String::from_utf8_lossy(&wire.into_inner()).starts_with("HTTP/1.1 403"));
+        let mut asked = None;
+        let mut wire = Cursor::new(Vec::new());
+        articles_route_with(
+            "code",
+            peer,
+            &post("/articles/sync", r#"{"token":"code"}"#),
+            &mut wire,
+            |from| {
+                asked = Some(from);
+                r#"{"delivered":2,"waiting":0}"#.to_owned()
+            },
+        );
+        assert_eq!(asked, Some(peer));
+        assert_eq!(
+            body_of(&wire.into_inner()),
+            r#"{"delivered":2,"waiting":0}"#
+        );
+        let mut wire = Cursor::new(Vec::new());
+        articles_route_with(
+            "code",
+            peer,
+            &get("/articles/sync?token=code"),
+            &mut wire,
+            |_| panic!("a GET started a delivery"),
+        );
+        assert!(String::from_utf8_lossy(&wire.into_inner()).starts_with("HTTP/1.1 404"));
+    }
+
+    #[test]
     fn a_question_travels_from_hook_to_reader_and_the_tap_travels_back() {
         let board = Arc::new(Board::new());
+        // The reader has been polling, as an open Sidekick does.
+        board.reader_seen();
         let hook_board = Arc::clone(&board);
         let hook = std::thread::spawn(move || {
             let mut wire = Cursor::new(Vec::new());
@@ -557,6 +697,85 @@ mod tests {
             .join()
             .expect("hook")
             .contains("\"decision\":\"allow\""));
+    }
+
+    #[test]
+    fn an_agent_asking_while_no_reader_is_open_is_sent_back_to_the_terminal_at_once() {
+        let board = Board::new();
+        let started = std::time::Instant::now();
+        let mut wire = Cursor::new(Vec::new());
+        hook_route(
+            &board,
+            &post(
+                "/ask",
+                r#"{"source":"claude","tool":"Bash","detail":"cargo test"}"#,
+            ),
+            &mut wire,
+        );
+        assert!(body_of(&wire.into_inner()).contains("\"decision\":\"pass\""));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the agent was held"
+        );
+    }
+
+    #[test]
+    fn the_companion_test_waits_for_a_reader_to_open_sidekick() {
+        let board = Arc::new(Board::new());
+        let hook_board = Arc::clone(&board);
+        let hook = std::thread::spawn(move || {
+            let mut wire = Cursor::new(Vec::new());
+            hook_route(
+                &hook_board,
+                &post(
+                    "/ask",
+                    r#"{"source":"kobo sidekick test","tool":"Sample","detail":"x","wait_for_reader":true}"#,
+                ),
+                &mut wire,
+            );
+            body_of(&wire.into_inner())
+        });
+        let mut wire = Cursor::new(Vec::new());
+        reader_route(
+            &board,
+            "code",
+            &get("/pending?token=code&wait=5"),
+            &mut wire,
+        );
+        let id = id_of(&body_of(&wire.into_inner()));
+        assert!(board.answer(id, crate::board::Decision::Deny));
+        assert!(hook.join().expect("hook").contains("\"decision\":\"deny\""));
+    }
+
+    #[test]
+    fn status_says_whether_a_paired_reader_is_in_touch() {
+        let board = Board::new();
+        let mut wire = Cursor::new(Vec::new());
+        hook_route(&board, &get("/status"), &mut wire);
+        assert!(body_of(&wire.into_inner()).contains("\"reader_watching\":false"));
+        let mut wire = Cursor::new(Vec::new());
+        reader_route(
+            &board,
+            "code",
+            &get("/pending?token=wrong&wait=0"),
+            &mut wire,
+        );
+        let mut wire = Cursor::new(Vec::new());
+        hook_route(&board, &get("/status"), &mut wire);
+        assert!(
+            body_of(&wire.into_inner()).contains("\"reader_watching\":false"),
+            "a wrong code counted as a reader"
+        );
+        let mut wire = Cursor::new(Vec::new());
+        reader_route(
+            &board,
+            "code",
+            &get("/pending?token=code&all=true"),
+            &mut wire,
+        );
+        let mut wire = Cursor::new(Vec::new());
+        hook_route(&board, &get("/status"), &mut wire);
+        assert!(body_of(&wire.into_inner()).contains("\"reader_watching\":true"));
     }
 
     #[test]
@@ -694,6 +913,7 @@ confirm = true
     #[test]
     fn all_pending_is_a_versioned_snapshot_with_session_identity() {
         let board = Arc::new(Board::new());
+        board.reader_seen();
         let hook_board = Arc::clone(&board);
         let hook = std::thread::spawn(move || {
             let mut wire = Cursor::new(Vec::new());
@@ -740,6 +960,7 @@ confirm = true
     #[test]
     fn an_ignored_question_lets_the_terminal_prompt_have_it() {
         let board = Arc::new(Board::new());
+        board.reader_seen();
         let hook_board = Arc::clone(&board);
         let hook = std::thread::spawn(move || {
             let mut wire = Cursor::new(Vec::new());
