@@ -2,7 +2,7 @@
 
 use kobo_json::Value;
 use kobo_policy::zones::{Zone, REGIONS, ZONES};
-use kobo_sdk::keyboard::{Keyboard, Pressed};
+use kobo_sdk::keyboard::{Keyboard, Pressed, TextEntry, Typing};
 use kobo_sdk::{
     action_id, ActionId, BandAlign, BannerLevel, BatteryDetail, BluetoothDevice, Context,
     DenyReason, DeviceError, DeviceIdentity, DeviceRequest, DeviceResult, FieldKind, Glyph,
@@ -14,6 +14,13 @@ use std::process::ExitCode;
 const BLUETOOTH: &str = "bluetooth";
 const WIFI: &str = "wifi";
 const BATTERY: &str = "battery";
+/// The row that opens the private catalog's password.
+const STORE_PASSWORD: &str = "store-password";
+/// The button that raises the keyboard for it.
+const TYPE_STORE_PASSWORD: &str = "type-store-password";
+/// The name the runtime reads the password back under. It is in Settings'
+/// own secret namespace, which no application can read.
+const STORE_PASSWORD_NAME: &str = "private-store";
 const ABOUT: &str = "about";
 const UPDATE: &str = "update";
 const CHECK: &str = "check";
@@ -145,6 +152,8 @@ enum View {
     /// The standing update choices: the channel and the two switches.
     UpdateOptions,
     UpdateChannelConfirm,
+    /// The password for the owner's own catalog beside the Store.
+    StorePassword,
     /// The way into the time zones: a suggestion, then the regions.
     TimeZone,
     /// One region's cities, by its place in `REGIONS`.
@@ -380,6 +389,11 @@ struct Settings {
     battery_clock: Heartbeat,
     selected_ssid: Option<String>,
     password: Keyboard,
+    /// The private catalog's password, typed on the runtime's keyboard and
+    /// saved by the runtime: it never reaches this application.
+    store_password: TextEntry,
+    /// What the last attempt to save it came to.
+    store_password_said: Option<(BannerLevel, &'static str)>,
     battery: Option<BatteryDetail>,
     identity: Option<DeviceIdentity>,
     about_page: usize,
@@ -433,6 +447,7 @@ impl Settings {
             View::Update => self.update(),
             View::UpdateOptions => self.update_options_for(context),
             View::UpdateChannelConfirm => self.update_channel_confirmation_for(context),
+            View::StorePassword => self.store_password_screen(),
             View::TimeZone => self.time_zones(),
             View::TimeZoneCities(region) => self.region_screen(context, region),
         };
@@ -537,6 +552,13 @@ impl Settings {
                 Glyph::Download,
             )
             .measured_as("Stable · Cobalt and apps update on their own"),
+            SettingsRow::new(
+                None,
+                STORE_PASSWORD,
+                "Private store",
+                "Password for your own catalog",
+                Glyph::Lock,
+            ),
             SettingsRow::new(None, ABOUT, "About", "Model and versions", Glyph::Reader),
         ];
         // After Battery, once the runtime has said it keeps a zone.
@@ -1990,6 +2012,63 @@ impl Settings {
             context.device().read_wifi();
         }
     }
+    /// The private catalog's password: what it is for, what the last save
+    /// came to, and the way to type it. Open, it is the runtime's own field.
+    fn store_password_screen(&self) -> Screen {
+        let screen = ScreenBuilder::new("settings-store-password")
+            .top_bar("Private store")
+            .owns_back(true);
+        if self.store_password.is_open() {
+            return screen
+                .secret_entry(&self.store_password, "Catalog password", "Save")
+                .build();
+        }
+        let mut screen = screen;
+        if let Some((level, said)) = self.store_password_said {
+            screen = screen.banner(level, said);
+        }
+        screen
+            .text(
+                "If your own catalog's server asks for a password, type it here. \
+                 Store sends it to that server and to no other.",
+            )
+            .button(TYPE_STORE_PASSWORD, "Type password")
+            .build()
+    }
+
+    /// The private catalog's password row, button and field. True when
+    /// `action` was one of theirs.
+    fn store_password_action(&mut self, context: &mut Context, action: ActionId) -> bool {
+        if let Some(typing) = self.store_password.handle(action) {
+            self.store_password_said = match typing {
+                Typing::Saved => Some((
+                    BannerLevel::Info,
+                    "Saved. Store uses it from its next refresh.",
+                )),
+                Typing::Refused(_) => {
+                    Some((BannerLevel::Error, "The password could not be saved."))
+                }
+                Typing::Changed | Typing::Cancelled | Typing::Submitted(_) => {
+                    self.store_password_said
+                }
+            };
+            self.show(context);
+            return true;
+        }
+        if action == action_id(STORE_PASSWORD) {
+            self.store_password_said = None;
+            self.view = View::StorePassword;
+        } else if action == action_id(TYPE_STORE_PASSWORD) && self.view == View::StorePassword {
+            self.store_password =
+                TextEntry::new().saved_as(kobo_sdk::SecretTarget::named(STORE_PASSWORD_NAME));
+            self.store_password.open();
+        } else {
+            return false;
+        }
+        self.show(context);
+        true
+    }
+
     /// Keystrokes for the Wi-Fi password screen, which owns every action
     /// while it is up: letters go to the keyboard, and the only ways off the
     /// screen are submitting a password or going back.
@@ -2120,6 +2199,9 @@ impl KoboApp for Settings {
         reason = "one explicit dispatch table for every screen"
     )]
     fn on_action(&mut self, context: &mut Context, action: ActionId) {
+        if self.store_password_action(context, action) {
+            return;
+        }
         if self.view == View::WifiPassword {
             self.password_action(context, action);
             return;
@@ -2205,6 +2287,7 @@ impl KoboApp for Settings {
                 | View::Update
                 | View::UpdateOptions
                 | View::UpdateChannelConfirm
+                | View::StorePassword
                 | View::TimeZone
                 | View::TimeZoneCities(_) => {}
             }
@@ -2230,6 +2313,7 @@ impl KoboApp for Settings {
                 | View::WifiPassword
                 | View::UpdateOptions
                 | View::UpdateChannelConfirm
+                | View::StorePassword
                 | View::TimeZone
                 | View::TimeZoneCities(_) => {}
             }
@@ -4313,6 +4397,59 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_private_store_password_is_saved_by_the_runtime_and_never_seen_here() {
+        use kobo_sdk::{AppRunner, Command};
+        let mut runner = AppRunner::new(Settings::default());
+        runner.start();
+        runner.action(action_id(super::STORE_PASSWORD));
+        assert_eq!(runner.app().view, View::StorePassword);
+        assert!(runner
+            .app()
+            .store_password_screen()
+            .validate(&CLARA_BW_METRICS)
+            .is_empty());
+
+        let commands = runner.action(action_id(super::TYPE_STORE_PASSWORD));
+        // The runtime is asked for a secret field that it saves itself, under
+        // the one name its Store reads back.
+        let asked = commands.iter().find_map(|command| match command {
+            Command::Device(DeviceRequest::TypeText { save_as, .. }) => save_as.clone(),
+            _ => None,
+        });
+        assert_eq!(
+            asked,
+            Some(kobo_sdk::SecretTarget::named(super::STORE_PASSWORD_NAME))
+        );
+        assert!(runner
+            .app()
+            .store_password_screen()
+            .validate(&CLARA_BW_METRICS)
+            .is_empty());
+
+        runner.answer_text(kobo_sdk::TextOutcome::Saved);
+        assert_eq!(runner.app().view, View::StorePassword);
+        assert_eq!(
+            runner.app().store_password_said,
+            Some((
+                BannerLevel::Info,
+                "Saved. Store uses it from its next refresh."
+            ))
+        );
+        assert!(runner
+            .app()
+            .store_password_screen()
+            .validate(&CLARA_BW_METRICS)
+            .is_empty());
+
+        // Backing out of the field changes nothing, and Back leaves the page.
+        runner.action(action_id(super::TYPE_STORE_PASSWORD));
+        runner.answer_text(kobo_sdk::TextOutcome::Cancelled);
+        assert_eq!(runner.app().view, View::StorePassword);
+        runner.action(kobo_sdk::ActionId::BACK);
+        assert_eq!(runner.app().view, View::Home);
     }
 
     #[test]

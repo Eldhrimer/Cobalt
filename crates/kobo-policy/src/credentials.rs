@@ -262,6 +262,9 @@ pub fn may_set(app: &str, name: &str) -> bool {
         "chat" => matches!(name, "openai" | "anthropic" | "gemini"),
         "lichess" => name == "lichess",
         "zotero-reader" => name == "zotero",
+        // The password for the owner's private catalog. Settings only writes
+        // it; the runtime reads it for the Store and no application can.
+        "settings" => name == "private-store",
         _ => false,
     }
 }

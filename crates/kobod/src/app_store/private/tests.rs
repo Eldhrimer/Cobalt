@@ -442,3 +442,48 @@ fn a_damaged_or_oversized_source_file_names_no_source() {
     fs::create_dir(source_file(&root)).expect("directory in its place");
     assert_eq!(source(&root), None);
 }
+
+fn save_password(root: &Path, password: &str) {
+    let directory = root.join("secrets").join("apps").join(PASSWORD_APP);
+    fs::create_dir_all(&directory).expect("secrets");
+    fs::write(directory.join(PASSWORD_NAME), password).expect("password");
+}
+
+#[test]
+fn the_password_goes_to_the_owners_server_and_nowhere_else() {
+    let root = root("password");
+    let on_server = "https://apps.example.net/own/drafter.cobalt-app";
+    // No source and no password: nothing is sent anywhere.
+    assert_eq!(authorization(&root, OWN_URL), None);
+    save_password(&root, "open sesame\n");
+    assert_eq!(authorization(&root, OWN_URL), None);
+
+    name_source(&root, Some(OWN_URL), &OWNER);
+    let expected = Some("Bearer open sesame".to_owned());
+    assert_eq!(authorization(&root, OWN_URL), expected);
+    assert_eq!(authorization(&root, &format!("{OWN_URL}.sig")), expected);
+    assert_eq!(authorization(&root, on_server), expected);
+    for elsewhere in [
+        CATALOG_URL,
+        "https://apps.example.net.attacker.invalid/own/drafter.cobalt-app",
+        "https://apps.example.net:8443/own/drafter.cobalt-app",
+        "https://packages.example.net/drafter.cobalt-app",
+        "http://apps.example.net/own/drafter.cobalt-app",
+    ] {
+        assert_eq!(authorization(&root, elsewhere), None, "{elsewhere}");
+    }
+
+    // A source that asks for nothing sends nothing.
+    name_source(&root, None, &OWNER);
+    assert_eq!(authorization(&root, on_server), None);
+}
+
+#[test]
+fn an_unusable_password_is_no_password() {
+    let root = root("bad-password");
+    name_source(&root, Some(OWN_URL), &OWNER);
+    for unusable in ["", "  \n", "two\nlines", &"x".repeat(600)] {
+        save_password(&root, unusable);
+        assert_eq!(authorization(&root, OWN_URL), None, "{unusable:?}");
+    }
+}

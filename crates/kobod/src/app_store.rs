@@ -204,7 +204,7 @@ const SYSTEM_APPS: &[BuiltinApp] = &[
 pub fn refresh(root: &Path, channel: UpdateChannel) -> Result<Vec<AppInfo>, DeviceError> {
     let key = public_key()?;
     refresh_channel_with(root, channel, &key, |url, maximum| {
-        kobo_net::fetch(url, maximum).map_err(network_error)
+        private::fetch(root, url, maximum).map_err(network_error)
     })
 }
 
@@ -308,7 +308,7 @@ fn installed_with_key(
 /// signature, digest, or atomic transaction is invalid.
 pub fn install(root: &Path, id: &str, channel: UpdateChannel) -> Result<(), DeviceError> {
     install_channel_with(root, id, channel, &public_key()?, |url, maximum| {
-        kobo_net::fetch(url, maximum).map_err(network_error)
+        private::fetch(root, url, maximum).map_err(network_error)
     })
 }
 

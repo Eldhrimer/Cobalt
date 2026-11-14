@@ -35,12 +35,12 @@ kobo private-store publish --app my-app \
     --registry target/app-registry.json \
     --seed ~/.config/cobalt/private-store.seed \
     --out target/private-store \
-    --base-url https://apps.example.net/<long-random-path>
+    --base-url https://apps.example.net/kobo-catalog
 
 # Copy target/private-store/* to the server so each file answers at
 # <base-url>/<file name>, then once per reader:
 kobo private-store set \
-    --url https://apps.example.net/<long-random-path>/cobalt-app-catalog-v2.json \
+    --url https://apps.example.net/kobo-catalog/cobalt-app-catalog-v2.json \
     --seed ~/.config/cobalt/private-store.seed \
     --device <reader address>
 ```
@@ -61,19 +61,34 @@ why: `Integrity` is a wrong key or an altered file, `Unreachable` and
 ## The server
 
 Any static HTTPS host works. The reader asks for the catalog, the same address
-with `.sig`, and each package's address from the catalog; it sends no
-credentials. Packages are signed, so the server cannot change what installs,
-but anyone who knows the address can download them. Put the files under a long
-random path and treat that address as the secret. With Caddy:
+with `.sig`, and each package's address from the catalog. Packages are signed,
+so the server cannot change what installs.
+
+To keep the packages to yourself, have the server ask for a password. On the
+reader, open **Settings ▸ Private store ▸ Type password**. The runtime saves it
+where no application can read it, and Store sends it as
+`Authorization: Bearer <password>` to the server your catalog's address names
+and to no other server. Package addresses must be on that same server to be
+sent it. With Caddy, the catalog stays readable and the packages need the
+password:
 
 ```
 apps.example.net {
-    root * /srv/kobo-apps
-    file_server
+    handle_path /kobo-catalog/* {
+        root * /srv/kobo-catalog
+        @locked {
+            path *.cobalt-app
+            not header Authorization "Bearer {$KOBO_CATALOG_TOKEN}"
+        }
+        respond @locked 401
+        file_server
+    }
 }
 ```
 
-with the published folder at `/srv/kobo-apps/<long-random-path>/`.
+Make sure the server cannot start with `KOBO_CATALOG_TOKEN` unset, or the check
+compares against an empty password. A wrong or missing password shows on the
+reader as an install that fails; the catalog still lists the application.
 
 ## Stopping
 

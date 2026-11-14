@@ -16,6 +16,13 @@
 //! - An installed application is believed when its manifest is signed by the
 //!   release key or by the owner's key, and by nothing else.
 //!
+//! The owner's server may ask for a password. The owner types it once, in
+//! Settings, and the runtime sends it as a bearer token to the server the
+//! catalog's address names and to no other: not to the public Store, and not
+//! to a package address on another server even when the owner's catalog
+//! lists one. The server decides what the password guards; the signatures
+//! decide what is installed either way.
+//!
 //! With no source file on the reader, none of this runs and the Store behaves
 //! exactly as it does without this module.
 //!
@@ -45,7 +52,14 @@ pub const SOURCE_FILE: &str = "private-store";
 /// Cobalt folder's `store` directory.
 pub const STATUS_FILE: &str = "private-status";
 
+/// The name the catalog's password is saved under, in Settings' own secret
+/// namespace, which is where a secret typed on its screen is written.
+pub const PASSWORD_NAME: &str = "private-store";
+/// The application whose secret namespace holds the password.
+pub const PASSWORD_APP: &str = "settings";
+
 const CACHE_NAME: &str = "catalog-private";
+const PASSWORD_LIMIT: u64 = 512;
 const SOURCE_LIMIT: u64 = 4096;
 /// What the Store shows in front of the summary of an application offered by
 /// the owner's source, so it is never mistaken for a public one.
@@ -141,6 +155,47 @@ pub fn source(root: &Path) -> Option<Source> {
         return None;
     }
     parse(&fs::read_to_string(path).ok()?).ok()
+}
+
+/// The password the owner saved for their server, if they saved one.
+fn password(root: &Path) -> Option<String> {
+    let path = kobo_policy::credentials::app_secret_path(
+        &root.join("secrets"),
+        PASSWORD_APP,
+        PASSWORD_NAME,
+    )?;
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    if !metadata.file_type().is_file() || metadata.len() > PASSWORD_LIMIT {
+        return None;
+    }
+    let text = fs::read_to_string(path).ok()?;
+    let password = text.trim();
+    (!password.is_empty() && !password.chars().any(char::is_control)).then(|| password.to_owned())
+}
+
+/// The `Authorization` value to send with a request for `url`, which is one
+/// only when `url` is on the server the owner's catalog is on.
+#[must_use]
+pub fn authorization(root: &Path, url: &str) -> Option<String> {
+    let source = source(root)?;
+    let home = kobo_net::parse(source.url.as_deref()?).ok()?;
+    if !kobo_net::has_origin(url, &home.host, home.port) {
+        return None;
+    }
+    Some(format!("Bearer {}", password(root)?))
+}
+
+/// Fetches for the Store on a reader: the owner's password goes to the
+/// owner's server, and every other address is asked without one.
+///
+/// # Errors
+///
+/// The transport's own bounded errors.
+pub fn fetch(root: &Path, url: &str, maximum: u32) -> Result<Vec<u8>, kobo_protocol::TaskError> {
+    match authorization(root, url) {
+        Some(value) => kobo_net::fetch_from(url, 0, maximum, Some(("Authorization", &value)), &[]),
+        None => kobo_net::fetch(url, maximum),
+    }
 }
 
 /// Whether the owner's key signed these manifest bytes.
