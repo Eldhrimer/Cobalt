@@ -12,6 +12,7 @@
 - [SDK guide](../SDK.md): the full application SDK reference.
 - [Contributing an app](CONTRIBUTING_APPS.md): layout, metadata, tests and review.
 - [App Store publishing](APP_STORE.md): signed packages, the catalog and updates.
+- [A private catalog beside the Store](PRIVATE_STORE.md): your own signed source for applications you do not publish.
 - [Simulator checks](SIMULATOR_CHECKS.md): scripted runs across the catalog.
 - [OPDS in Cobalt](OPDS.md): the shared book-catalog client.
 
