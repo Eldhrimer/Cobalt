@@ -11,6 +11,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+pub mod private;
+
 // Each channel publishes two signed catalogs. This runtime reads the one that
 // names every application's own mark, `kobo_app_store::CATALOG_FILE`. The
 // other, `kobo_app_store::EARLIER_CATALOG_FILE`, is what runtimes up to 0.3.33
@@ -697,6 +699,8 @@ pub fn refresh_using_fault(
     mut fetch: impl FnMut(&str, u32) -> Result<Vec<u8>, DeviceError>,
     fault: Option<AppWriteFault>,
 ) -> Result<Vec<AppInfo>, DeviceError> {
+    // First, so the listing this returns already holds what it brought.
+    private::refresh(root, &mut fetch, fault.is_some());
     let (json, signature) = fetch_catalog(channel, &mut fetch)?;
     let catalog = verify_catalog(&json, &signature, key)?;
     if fault.is_some() {
@@ -760,7 +764,10 @@ pub fn install_using_fault(
         return Err(DeviceError::InvalidInput);
     }
     recover_interrupted_transaction(root, id, key)?;
-    let catalog = read_channel_catalog(root, channel, key)?;
+    // The owner's catalog is read only for an identity the public one does
+    // not list, and its packages answer to the owner's key.
+    let (catalog, signer) =
+        private::catalog_for(root, id, read_channel_catalog(root, channel, key), key)?;
     let entry = catalog
         .entries()
         .iter()
@@ -785,7 +792,7 @@ pub fn install_using_fault(
     {
         return Err(DeviceError::Integrity);
     }
-    let bundle = parse_installable_bundle(&package, key).map_err(|_| DeviceError::Integrity)?;
+    let bundle = parse_installable_bundle(&package, &signer).map_err(|_| DeviceError::Integrity)?;
     // The entry is the bundle's own manifest, or the same manifest with the
     // stand-in glyph when the entry came from the earlier catalog.
     if !bundle.manifest().is_offered_as(entry.manifest()) {
@@ -902,12 +909,9 @@ fn catalog_info(
             manifest_info(entry.manifest(), version)
         })
         .collect::<Vec<_>>();
+    private::offer(root, &installed, &mut entries);
     for installed in installed {
-        if !catalog
-            .entries()
-            .iter()
-            .any(|entry| entry.manifest().id() == installed.id)
-        {
+        if !entries.iter().any(|entry| entry.id == installed.id) {
             entries.push(installed);
         }
     }
@@ -917,7 +921,14 @@ fn catalog_info(
 }
 
 fn local_catalog_info(root: &Path, _key: &Ed25519PublicKey) -> Result<Vec<AppInfo>, DeviceError> {
-    let mut entries = installed(root)?;
+    let installed = installed(root)?;
+    let mut entries = Vec::new();
+    private::offer(root, &installed, &mut entries);
+    for installed in installed {
+        if !entries.iter().any(|entry| entry.id == installed.id) {
+            entries.push(installed);
+        }
+    }
     entries.extend(system_info(root)?);
     sort_info(&mut entries);
     Ok(entries)
@@ -1143,7 +1154,11 @@ fn read_signed_manifest(
         .map_err(|error| installed_component_read_error(&error))?;
     let signature =
         DetachedSignature::from_hex(signature.trim()).map_err(|_| DeviceError::Integrity)?;
-    verify(&bytes, &signature, key).map_err(|_| DeviceError::Integrity)?;
+    // Signed by `key`, or by the key of the source the owner added.
+    if verify(&bytes, &signature, key).is_err() && !private::vouches(directory, &bytes, &signature)
+    {
+        return Err(DeviceError::Integrity);
+    }
     Ok(manifest)
 }
 
@@ -1257,13 +1272,22 @@ fn write_channel_catalog_cache(
     json: &[u8],
     signature: &[u8],
 ) -> Result<(), DeviceError> {
+    write_named_catalog_cache(root, catalog_source(channel).cache_name, json, signature)
+}
+
+/// Atomically replaces the cached catalog kept under `name`.
+fn write_named_catalog_cache(
+    root: &Path,
+    name: &str,
+    json: &[u8],
+    signature: &[u8],
+) -> Result<(), DeviceError> {
     let store = cache_root(root);
     fs::create_dir_all(&store).map_err(|_| DeviceError::Backend)?;
     sync_directory(root)?;
-    let source = catalog_source(channel);
-    let current = catalog_cache(root, channel);
-    let next = store.join(format!("{}.next", source.cache_name));
-    let previous = store.join(format!("{}.prev", source.cache_name));
+    let current = store.join(name);
+    let next = store.join(format!("{name}.next"));
+    let previous = store.join(format!("{name}.prev"));
     remove_directory(&next)?;
     fs::create_dir(&next).map_err(|_| DeviceError::Backend)?;
     if write_synced(&next.join("catalog.json"), json).is_err()
@@ -1296,12 +1320,21 @@ fn recover_channel_catalog_cache(
     channel: UpdateChannel,
     key: &Ed25519PublicKey,
 ) -> Result<(), DeviceError> {
-    let source = catalog_source(channel);
-    let current = catalog_cache(root, channel);
+    recover_named_catalog_cache(root, catalog_source(channel).cache_name, key)
+}
+
+/// Puts back the last verified catalog kept under `name` after an
+/// interrupted replacement.
+fn recover_named_catalog_cache(
+    root: &Path,
+    name: &str,
+    key: &Ed25519PublicKey,
+) -> Result<(), DeviceError> {
+    let current = cache_root(root).join(name);
     if safe_directory(&current)? && read_catalog_directory(&current, key).is_ok() {
         return Ok(());
     }
-    let previous = cache_root(root).join(format!("{}.prev", source.cache_name));
+    let previous = cache_root(root).join(format!("{name}.prev"));
     if safe_directory(&previous)? && read_catalog_directory(&previous, key).is_ok() {
         remove_directory(&current)?;
         rename_synced(&previous, &current, &cache_root(root))?;
