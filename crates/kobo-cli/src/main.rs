@@ -122,7 +122,6 @@ const STORE_PACKAGES: &[&str] = &[
     "kobo-chat",
     "kobo-crossword",
     "kobo-deck",
-    "kobo-drafter",
     "kobo-fanshelf",
     "kobo-fieldbook",
     "kobo-flashcards",
@@ -3231,9 +3230,36 @@ impl Drop for DevSessionGuard {
     }
 }
 
+/// The manifest to build when this folder was reached through a symbolic
+/// link, as an application kept in another repository and linked into
+/// `apps/` is.
+///
+/// Cargo is started in the folder the link points at, where there is no
+/// workspace above it and the path dependencies lead nowhere. The shell still
+/// knows the path that was typed, and cargo resolves a manifest named by that
+/// path against the workspace the link sits in.
+fn linked_manifest() -> Option<PathBuf> {
+    let typed = PathBuf::from(env::var_os("PWD")?);
+    let actual = env::current_dir().ok()?;
+    if !typed.is_absolute() || typed == actual || fs::canonicalize(&typed).ok()? != actual {
+        return None;
+    }
+    let manifest = typed.join("Cargo.toml");
+    manifest.is_file().then_some(manifest)
+}
+
+/// Names the linked manifest, after the subcommand it applies to.
+fn name_linked_manifest(command: &mut Command) {
+    if let Some(manifest) = linked_manifest() {
+        command.arg("--manifest-path").arg(manifest);
+    }
+}
+
 fn build_dev_app() -> Result<PathBuf, String> {
-    let output = Command::new("cargo")
-        .args(["build", "--message-format=json"])
+    let mut build = Command::new("cargo");
+    build.args(["build", "--message-format=json"]);
+    name_linked_manifest(&mut build);
+    let output = build
         .output()
         .map_err(|error| format!("build application: {error}"))?;
     if !output.status.success() {
@@ -3405,6 +3431,7 @@ fn valid_slug(value: &str) -> bool {
 fn build_device(device: bool) -> Result<(), String> {
     let mut command = Command::new("cargo");
     command.args(["build", "--release"]);
+    name_linked_manifest(&mut command);
     if device {
         let linker = find_rust_lld()?;
         command.env("CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER", linker);

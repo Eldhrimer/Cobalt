@@ -31,7 +31,7 @@ kobo private-store keygen --seed ~/.config/cobalt/private-store.seed
 
 # Each release: build, sign and lay out the catalog and packages.
 node tools/collect-app-registry.mjs --out target/app-registry.json
-kobo private-store publish --app drafter \
+kobo private-store publish --app my-app \
     --registry target/app-registry.json \
     --seed ~/.config/cobalt/private-store.seed \
     --out target/private-store \
@@ -44,6 +44,10 @@ kobo private-store set \
     --seed ~/.config/cobalt/private-store.seed \
     --device <reader address>
 ```
+
+The applications are ordinary workspace members under `apps/`. Their source
+can live anywhere, such as a private repository linked into `apps/` for the
+build, so a public tree never holds them.
 
 `publish` builds each application for the reader, so it needs the ARM
 toolchain `kobo build` needs. Every changed application needs a new version in

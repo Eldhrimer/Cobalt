@@ -31,8 +31,8 @@ BASE = 'https://apps.example.invalid/own'
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--app', default='drafter', help='the workspace application to publish')
-    parser.add_argument('--title', default='Drafter', help="that application's display name")
+    parser.add_argument('--app', default='post', help='the workspace application to publish')
+    parser.add_argument('--title', default='Post', help="that application's display name")
     parser.add_argument('--scale', default='default')
     args = parser.parse_args()
     target = Path(os.environ.get('CARGO_TARGET_DIR', str(ROOT / 'target'))).resolve()
