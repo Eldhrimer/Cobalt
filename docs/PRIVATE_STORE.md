@@ -103,14 +103,42 @@ reader as an install that fails; the catalog still lists the application.
 ## Limits
 
 - One private source per reader.
-- Platform updates come from the public releases. Installing one replaces the
-  runtime with a stock one, which ignores the source file: your applications
-  then fail verification until a runtime with this change is installed again.
-  Turn off automatic platform updates in Settings, and after each upstream
-  release rebuild from your tree and install it with `kobo deploy`.
+- A stock runtime ignores the source file, so the reader must not take stock
+  platform updates. Build your Cobalt as your own (next section) and it never
+  will.
 - Browser install links only know the public catalog.
 - A failed refresh of your catalog is recorded for `show` and is not reported
   on the panel; the public catalog's refresh is the one Store reports.
+
+## Your own platform updates
+
+A Cobalt compiled with two variables set is yours: its reader takes platform
+updates only from your repository's GitHub releases, signed with your key, in
+the background and from Settings alike. It never installs a stock release.
+The public Store's catalog still answers to the release key.
+
+```sh
+export COBALT_RELEASE_REPOSITORY=you/Cobalt
+export COBALT_PLATFORM_KEY=<public key of your seed>
+```
+
+Set both or neither; a build with only one does not compile. Without them the
+build is a stock one.
+
+Versions are the upstream version with a two-digit build number on the last
+part: upstream 0.3.37 is released as 0.3.3701, then 0.3.3702, and the first
+build of 0.3.38 is 0.3.3801. Each is newer to the updater than the one before.
+
+`.github/workflows/owner-release.yml` publishes one: run it by hand after
+merging an upstream release. It needs the secret `COBALT_PRIVATE_STORE_SEED`
+and the variable `COBALT_PLATFORM_KEY`. By hand it is
+`tools/owner-release.sh BUILD SEED_FILE OUT_DIR`, then a release tagged
+`vVERSION` holding the three files it writes. The reader's update channel must
+be Stable; your releases have no beta stream.
+
+The first install of your build is by hand: copy
+`cobalt-VERSION-KoboRoot.tgz` from the release to `.kobo/KoboRoot.tgz` on the
+reader over USB and eject it. After that it updates itself.
 
 ## Checking it
 

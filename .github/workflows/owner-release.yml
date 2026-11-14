@@ -1,0 +1,140 @@
+name: Publish an owner's platform release
+
+# Builds this tree as the repository owner's own Cobalt and publishes it as a
+# GitHub release. A reader running such a build takes platform updates from
+# these releases only, verified with the owner's key, and never a stock one.
+#
+# Run it by hand after merging an upstream release (or any change to the
+# runtime). The version is the upstream version in Cargo.toml with a two-digit
+# build number on its last part: 0.3.37 becomes 0.3.3701, then 0.3.3702.
+#
+# Repository secret:
+#   COBALT_PRIVATE_STORE_SEED  the owner's signing seed (64 hex characters)
+# Repository variable:
+#   COBALT_PLATFORM_KEY        that seed's public key (kobo app-key --seed FILE)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: Build number (1-99). Empty picks the next free one.
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: owner-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      COBALT_RELEASE_REPOSITORY: ${{ github.repository }}
+      COBALT_PLATFORM_KEY: ${{ vars.COBALT_PLATFORM_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require the owner's key
+        run: |
+          test -n "$COBALT_PLATFORM_KEY" || {
+            echo "Set the repository variable COBALT_PLATFORM_KEY" >&2
+            exit 1
+          }
+
+      - name: Choose the build number
+        id: number
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ inputs.build }}
+        run: |
+          set -eu
+          upstream=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\.[0-9]*\)"$/\1/p' Cargo.toml | head -n 1)
+          build=$REQUESTED
+          if [ -z "$build" ]; then
+            build=1
+            while gh release view "v${upstream%.*}.${upstream##*.}$(printf '%02d' "$build")" \
+              --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; do
+              build=$((build + 1))
+            done
+          fi
+          version="${upstream%.*}.${upstream##*.}$(printf '%02d' "$build")"
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$version is already published; releases are never replaced" >&2
+            exit 1
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install the reader toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-arm-linux-gnueabihf
+          rustup show
+          rustup target add armv7-unknown-linux-musleabihf
+
+      # The same pinned Zig the upstream release uses as the musl C compiler:
+      # SQLite needs musl headers, which the glibc cross-compiler lacks.
+      - name: Install the musl cross-compiler the device C needs
+        run: |
+          set -eu
+          zig_downloaded=false
+          for zig_url in \
+            'https://pkg.hexops.org/zig/zig-x86_64-linux-0.16.0.tar.xz?source=cobalt-ci' \
+            'https://ziglang.freetls.fastly.net/zig-x86_64-linux-0.16.0.tar.xz?source=cobalt-ci' \
+            'https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz'; do
+            if curl -fL --connect-timeout 15 --max-time 120 \
+              --speed-limit 1024 --speed-time 20 -o /tmp/zig.tar.xz "$zig_url" \
+              && echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" \
+                | sha256sum -c -; then
+              zig_downloaded=true
+              break
+            fi
+          done
+          [ "$zig_downloaded" = true ] || { echo "No source supplied the pinned Zig archive" >&2; exit 1; }
+          sudo tar -xJf /tmp/zig.tar.xz -C /opt
+          sudo tee /usr/local/bin/armv7-musl-cc >/dev/null <<'CC'
+          #!/bin/sh
+          zig=/opt/zig-x86_64-linux-0.16.0/zig
+          count=$#
+          index=0
+          while [ "$index" -lt "$count" ]; do
+            argument="$1"
+            shift
+            case "$argument" in
+              --target=*) ;;
+              *) set -- "$@" "$argument" ;;
+            esac
+            index=$((index + 1))
+          done
+          exec "$zig" cc -target arm-linux-musleabihf -fno-sanitize=undefined "$@"
+          CC
+          sudo chmod +x /usr/local/bin/armv7-musl-cc
+
+      - name: Build and sign the release
+        env:
+          COBALT_PRIVATE_STORE_SEED: ${{ secrets.COBALT_PRIVATE_STORE_SEED }}
+          CC_armv7_unknown_linux_musleabihf: armv7-musl-cc
+          CFLAGS_armv7_unknown_linux_musleabihf: -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0
+          BUILD: ${{ steps.number.outputs.build }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$COBALT_PRIVATE_STORE_SEED" || { echo "COBALT_PRIVATE_STORE_SEED is not set" >&2; exit 1; }
+          seed="$RUNNER_TEMP/owner.seed"
+          trap 'rm -f "$seed"' EXIT
+          printf '%s\n' "$COBALT_PRIVATE_STORE_SEED" > "$seed"
+          tools/owner-release.sh "$BUILD" "$seed" dist
+          chmod -R a+r dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.number.outputs.version }}
+        run: |
+          gh release create "v$VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Cobalt $VERSION" \
+            --notes "Owner build $VERSION of this tree. Readers running this owner's Cobalt update to it on their own."

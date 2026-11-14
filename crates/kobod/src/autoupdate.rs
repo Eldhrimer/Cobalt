@@ -496,6 +496,60 @@ mod tests {
         assert_eq!(release.signature, "https://example.test/manifest.sig");
     }
 
+    /// An owner's release, as their own build reads it: the build-numbered
+    /// version is newer than the upstream one it is made from, and the
+    /// device-only manifest names the package. Holds in a stock build too,
+    /// where the metadata asset is the host manifest.
+    #[test]
+    fn an_owner_numbered_release_is_newer_and_read_by_its_metadata_name() {
+        assert!(newer("0.3.3701", "0.3.37"));
+        assert!(newer("0.3.3702", "0.3.3701"));
+        assert!(newer("0.3.3801", "0.3.3799"));
+        assert!(!newer("0.3.38", "0.3.3701"));
+
+        let metadata = kobo_app_store::PLATFORM.manifest_file();
+        let body = format!(
+            r#"{{"tag_name":"v0.3.3701","draft":false,"prerelease":false,"assets":[
+                {{"name":"cobalt-0.3.3701-KoboRoot.tgz","browser_download_url":"https://example.test/package"}},
+                {{"name":"{metadata}","browser_download_url":"https://example.test/manifest"}},
+                {{"name":"{metadata}.sig","browser_download_url":"https://example.test/manifest.sig"}}]}}"#
+        );
+        let release = release_from(&body).expect("release");
+        assert_eq!(release.version, "0.3.3701");
+        assert_eq!(release.manifest, "https://example.test/manifest");
+
+        let text = kobo_app_store::device_manifest(
+            "0.3.3701",
+            "0123456789abcdef0123456789abcdef01234567",
+            "cobalt-0.3.3701-KoboRoot.tgz",
+            12,
+            &"a".repeat(64),
+        )
+        .expect("manifest");
+        let manifest =
+            kobo_app_store::ReleaseManifest::parse_device(text.as_bytes()).expect("parsed");
+        assert_eq!(
+            platform_from_manifest(release.clone(), &manifest),
+            Some(PlatformUpdate {
+                version: "0.3.3701".to_owned(),
+                url: "https://example.test/package".to_owned(),
+                sha256: "a".repeat(64),
+            })
+        );
+        // Metadata for another version is not this release's.
+        let other = kobo_app_store::device_manifest(
+            "0.3.3702",
+            "0123456789abcdef0123456789abcdef01234567",
+            "cobalt-0.3.3702-KoboRoot.tgz",
+            12,
+            &"a".repeat(64),
+        )
+        .expect("manifest");
+        let other =
+            kobo_app_store::ReleaseManifest::parse_device(other.as_bytes()).expect("parsed");
+        assert_eq!(platform_from_manifest(release, &other), None);
+    }
+
     #[test]
     fn a_release_missing_either_asset_offers_nothing() {
         assert!(release_from(r#"{"tag_name": "v0.4.0", "assets": []}"#).is_none());
