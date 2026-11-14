@@ -170,7 +170,9 @@ export function collectRegistry({
   const apps = [...base.apps];
   for (const sourcePath of sourcePaths) {
     for (const entry of readdirSync(sourcePath, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
+      // A link counts: an application kept in another repository is linked
+      // into apps/ for the build.
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
       const manifestPath = join(sourcePath, entry.name, "cobalt-app.json");
       let source;
       try {
