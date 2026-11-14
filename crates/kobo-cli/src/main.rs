@@ -44,6 +44,7 @@ mod owner_start;
 mod package;
 mod panels;
 mod post;
+mod private_store;
 mod publish;
 mod readers;
 mod readlater;
@@ -1160,6 +1161,7 @@ fn run_command(arguments: &[String]) -> Result<(), String> {
         "musicstand" => musicstand::command(&arguments[1..]),
         "post" => post::command(&arguments[1..]),
         "drafter" => drafter::command(&arguments[1..]),
+        "private-store" => private_store::command(&arguments[1..]),
         "readlater" => readlater::command(&arguments[1..]),
         "connect" => account::command(&arguments[1..]),
         "birds" => birds::command(&arguments[1..]),
@@ -2450,6 +2452,51 @@ fn app_check(arguments: &[String]) -> Result<(), String> {
 }
 
 fn app_release(arguments: &[String]) -> Result<(), String> {
+    publish_release(arguments, None)
+}
+
+/// The registry's applications, or only the ones a private source names.
+fn published_apps(
+    mut apps: Vec<ReleaseApp>,
+    own: Option<&[String]>,
+) -> Result<Vec<ReleaseApp>, String> {
+    if let Some(chosen) = own {
+        if let Some(missing) = chosen
+            .iter()
+            .find(|id| !apps.iter().any(|app| app.id == **id))
+        {
+            return Err(format!(
+                "the app registry has no application named {missing}"
+            ));
+        }
+        apps.retain(|app| chosen.contains(&app.id));
+    }
+    Ok(apps)
+}
+
+/// The public Store is signed with the release key and nothing else is.
+fn check_publishing_key(
+    public: &kobo_app_store::Ed25519PublicKey,
+    private: bool,
+) -> Result<(), String> {
+    let release_key = public.to_string() == kobo_app_store::PUBLIC_RELEASE_KEY_HEX;
+    if !private && !release_key {
+        return Err(
+            "the signing seed does not match the public key trusted by Cobalt runtimes".to_owned(),
+        );
+    }
+    if private && release_key {
+        return Err("a private source is signed with a key of its own".to_owned());
+    }
+    Ok(())
+}
+
+/// Builds, signs and lays out a catalog and its packages.
+///
+/// `own` is `None` for the public Store, whose seed must be the release
+/// key's. For an owner's private source it names the applications to publish,
+/// and the seed must be anything but the release key's.
+fn publish_release(arguments: &[String], own: Option<&[String]>) -> Result<(), String> {
     const USAGE: &str = "usage: kobo app-release --registry PATH --seed PATH --out PATH \
                          --base-url HTTPS_URL [--prebuilt-dir PATH | --artifact-dir PATH]";
     let registry_path = single_path_flag(arguments, "--registry", USAGE)?;
@@ -2477,7 +2524,7 @@ fn app_release(arguments: &[String]) -> Result<(), String> {
         return Err("--base-url must use HTTPS".to_owned());
     }
     let base_url = base_url.trim_end_matches('/');
-    let apps = read_release_registry(&registry_path)?;
+    let apps = published_apps(read_release_registry(&registry_path)?, own)?;
     if apps.is_empty() {
         return Err("the app registry is empty".to_owned());
     }
@@ -2489,11 +2536,7 @@ fn app_release(arguments: &[String]) -> Result<(), String> {
     }
     let seed = read_signing_seed(&seed_path)?;
     let public = kobo_app_store::derive_public_key(&seed).map_err(|error| error.to_string())?;
-    if public.to_string() != kobo_app_store::PUBLIC_RELEASE_KEY_HEX {
-        return Err(
-            "the signing seed does not match the public key trusted by Cobalt runtimes".to_owned(),
-        );
-    }
+    check_publishing_key(&public, own.is_some())?;
     fs::create_dir_all(&output).map_err(|error| format!("create {}: {error}", output.display()))?;
 
     let mut entries = Vec::with_capacity(apps.len());
@@ -8541,6 +8584,7 @@ Send things to your apps. These go to the reader kobo setup saved; add
   birds listen --source URL | status | stop  Mirror BirdNET-Go to Birds
   post login --gateway URL --token-file PATH  Sign Post in to a Hermes gateway
   drafter login --gateway URL --token-file PATH  Sign Drafter in to your book gateway
+  private-store keygen | set | show | remove | publish  Your own catalog beside the Store
   readlater login --server URL ...  Sign Read Later in to Wallabag
   sync setup DIR --folder NAME | run | status | stop  Keep a folder in sync
   export --app APP --out DIR  Receive a copy an app prepared for you

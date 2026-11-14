@@ -12,6 +12,7 @@ fn owner_help_names_every_shipped_companion_and_never_advertises_compiled_out_pa
         "musicstand",
         "post",
         "drafter",
+        "private-store",
         "readlater",
         "birds",
         "vault",
