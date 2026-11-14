@@ -18,9 +18,9 @@ use std::path::{Path, PathBuf};
 
 use kobo_protocol::{DeviceError, UpdateChannel};
 
-/// Where releases are published. The same address the settings screen asks,
-/// so the two paths cannot disagree about what "newest" means.
-const STABLE_RELEASES: &str = "https://api.github.com/repos/BandarLabs/Cobalt/releases/latest";
+// Releases are published where `kobo_app_store::PLATFORM` says, which is the
+// same place the settings screen asks, so the two paths cannot disagree about
+// what "newest" means or about whose releases this build takes.
 /// The newest releases, rather than all of them.
 ///
 /// GitHub cannot be asked for prereleases alone, so the newest beta has to be
@@ -34,7 +34,7 @@ const STABLE_RELEASES: &str = "https://api.github.com/repos/BandarLabs/Cobalt/re
 /// frequent tag here, so the newest one has never been far from the top; the
 /// case this gives up on is twenty consecutive releases without a single beta,
 /// by which time nobody is waiting on a beta anyway.
-const BETA_RELEASES: &str = "https://api.github.com/repos/BandarLabs/Cobalt/releases?per_page=20";
+const BETA_RELEASE_COUNT: u32 = 20;
 
 /// The most a release listing is allowed to be.
 ///
@@ -221,11 +221,12 @@ fn stale_apps(root: &Path, channel: UpdateChannel) -> Vec<String> {
 /// A strictly newer published release, with its signed manifest verified, or
 /// nothing. All-or-nothing on purpose: unsigned metadata is not an update.
 fn platform_update(installed: &str, channel: UpdateChannel) -> Option<PlatformUpdate> {
+    let source = kobo_app_store::PLATFORM;
     let endpoint = match channel {
-        UpdateChannel::Stable => STABLE_RELEASES,
-        UpdateChannel::Beta => BETA_RELEASES,
+        UpdateChannel::Stable => source.stable_releases_url(),
+        UpdateChannel::Beta => source.recent_releases_url(BETA_RELEASE_COUNT),
     };
-    let body = kobo_net::fetch(endpoint, RELEASE_LIMIT).ok()?;
+    let body = kobo_net::fetch(&endpoint, RELEASE_LIMIT).ok()?;
     let body = String::from_utf8(body).ok()?;
     let release = match channel {
         UpdateChannel::Stable => release_from(&body),
@@ -237,7 +238,7 @@ fn platform_update(installed: &str, channel: UpdateChannel) -> Option<PlatformUp
     let manifest = kobo_net::fetch(&release.manifest, MANIFEST_LIMIT).ok()?;
     let signature = kobo_net::fetch(&release.signature, SIGNATURE_LIMIT).ok()?;
     let signature = String::from_utf8(signature).ok()?;
-    let manifest = kobo_app_store::verify_release_manifest(&manifest, &signature).ok()?;
+    let manifest = source.verify_manifest(&manifest, &signature).ok()?;
     platform_from_manifest(release, &manifest)
 }
 
@@ -316,8 +317,9 @@ fn release_value(
             .map(str::to_owned)
     };
     let archive = url_of(&archive_file(&version))?;
-    let manifest = url_of("cobalt-host-manifest.txt")?;
-    let signature = url_of("cobalt-host-manifest.txt.sig")?;
+    let metadata = kobo_app_store::PLATFORM.manifest_file();
+    let manifest = url_of(metadata)?;
+    let signature = url_of(&format!("{metadata}.sig"))?;
     Some(Release {
         version,
         archive,

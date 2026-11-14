@@ -22,7 +22,10 @@ pub use model::{
     is_public_reserved_app_id, mark_names, public_reserved_app_ids, Catalog, CatalogEntry,
     CatalogEntryInput, Manifest, ManifestInput, Sha256Digest, FIRST_MARKED_RUNTIME,
 };
-pub use release::{verify_release_manifest, ReleaseAsset, ReleaseManifest};
+pub use release::{
+    device_manifest, verify_device_manifest, verify_release_manifest, PlatformSource, ReleaseAsset,
+    ReleaseManifest, DEVICE_MANIFEST_FILE, PLATFORM,
+};
 pub use signing::{derive_public_key, sign, verify, DetachedSignature, Ed25519PublicKey};
 
 /// The signed catalog a runtime from [`FIRST_MARKED_RUNTIME`] reads, which

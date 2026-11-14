@@ -16,6 +16,8 @@ const USAGE: &str = "usage: kobo private-store keygen --seed PATH\n\
      \x20      kobo private-store remove [--forget-key] TARGET\n\
      \x20      kobo private-store publish --app ID [--app ID ...] --registry PATH --seed PATH\n\
      \x20             --out DIR --base-url HTTPS_URL [--prebuilt-dir PATH | --artifact-dir PATH]\n\
+     \x20      kobo private-store platform --package PATH --version X.Y.Z --source COMMIT\n\
+     \x20             --seed PATH --out DIR\n\
      \n\
      TARGET is --device IP, --volume PATH (a reader mounted over USB) or\n\
      --root PATH (a Cobalt folder, such as a simulator Store fixture).\n\
@@ -30,7 +32,11 @@ const USAGE: &str = "usage: kobo private-store keygen --seed PATH\n\
      the key: uninstall those applications first, or the reader will refuse to\n\
      list what is installed until the key is back.\n\
      publish builds, signs and lays out the catalog and packages for the named\n\
-     applications in DIR, ready to serve as static files at the base address.";
+     applications in DIR, ready to serve as static files at the base address.\n\
+     platform signs one device package as a platform release of your own: it\n\
+     writes cobalt-device-manifest.txt and its .sig into DIR, to upload beside\n\
+     the package as a GitHub release tagged vX.Y.Z. Only a Cobalt built with\n\
+     COBALT_RELEASE_REPOSITORY and COBALT_PLATFORM_KEY set takes such a release.";
 
 enum Target {
     Device(String),
@@ -48,6 +54,7 @@ pub fn command(arguments: &[String]) -> Result<(), String> {
         "show" => show(rest),
         "remove" => remove(rest),
         "publish" => publish(rest),
+        "platform" => platform(rest),
         _ => Err(USAGE.to_owned()),
     }
 }
@@ -328,6 +335,76 @@ fn publish(arguments: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Signs one device package as an owner's platform release.
+fn platform(arguments: &[String]) -> Result<(), String> {
+    let mut package = None;
+    let mut version = None;
+    let mut source = None;
+    let mut seed = None;
+    let mut out = None;
+    let mut rest = arguments;
+    while let Some((flag, tail)) = rest.split_first() {
+        let (value, tail) = tail.split_first().ok_or_else(|| USAGE.to_owned())?;
+        let slot = match flag.as_str() {
+            "--package" => &mut package,
+            "--version" => &mut version,
+            "--source" => &mut source,
+            "--seed" => &mut seed,
+            "--out" => &mut out,
+            _ => return Err(USAGE.to_owned()),
+        };
+        if slot.replace(value.clone()).is_some() {
+            return Err(USAGE.to_owned());
+        }
+        rest = tail;
+    }
+    let (Some(package), Some(version), Some(source), Some(seed), Some(out)) =
+        (package, version, source, seed, out)
+    else {
+        return Err(USAGE.to_owned());
+    };
+    let seed = super::read_signing_seed(Path::new(&seed))?;
+    let public = kobo_app_store::derive_public_key(&seed).map_err(|error| error.to_string())?;
+    if public.to_string() == kobo_app_store::PUBLIC_RELEASE_KEY_HEX {
+        return Err("your own platform releases are signed with a key of their own".to_owned());
+    }
+    // The reader looks for the package under exactly this name.
+    let expected = format!("cobalt-{version}-KoboRoot.tgz");
+    let name = Path::new(&package)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if name != expected {
+        return Err(format!(
+            "the package for {version} must be named {expected}"
+        ));
+    }
+    let bytes = fs::read(&package).map_err(|error| format!("read {package}: {error}"))?;
+    let manifest = kobo_app_store::device_manifest(
+        &version,
+        &source,
+        name,
+        bytes.len() as u64,
+        &kobo_net::sha256::hex_digest(&bytes),
+    )?;
+    let signature = kobo_app_store::sign(manifest.as_bytes(), &seed)
+        .map_err(|error| format!("sign the manifest: {error}"))?;
+    // Checked the way a reader will, before anything is written.
+    kobo_app_store::verify_device_manifest(manifest.as_bytes(), &signature.to_hex(), &public)?;
+    let out = Path::new(&out);
+    fs::create_dir_all(out).map_err(|error| format!("create {}: {error}", out.display()))?;
+    let manifest_path = out.join(kobo_app_store::DEVICE_MANIFEST_FILE);
+    let signature_path = out.join(format!("{}.sig", kobo_app_store::DEVICE_MANIFEST_FILE));
+    fs::write(&manifest_path, &manifest)
+        .map_err(|error| format!("write {}: {error}", manifest_path.display()))?;
+    fs::write(&signature_path, format!("{signature}\n"))
+        .map_err(|error| format!("write {}: {error}", signature_path.display()))?;
+    println!("created {}", manifest_path.display());
+    println!("created {}", signature_path.display());
+    println!("Readers built with COBALT_PLATFORM_KEY={public} take this release.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +488,57 @@ mod tests {
         // A target is required, and only one.
         assert!(command(&strings(&["show"])).is_err());
         assert!(command(&strings(&["show", "--root", "a", "--root", "b"])).is_err());
+    }
+
+    #[test]
+    fn platform_signs_a_package_a_reader_would_verify() {
+        let root = folder("platform");
+        let seed = root.join("seed");
+        command(&strings(&[
+            "keygen",
+            "--seed",
+            seed.to_str().expect("path"),
+        ]))
+        .expect("keygen");
+        let key = kobo_app_store::derive_public_key(
+            &super::super::read_signing_seed(&seed).expect("seed"),
+        )
+        .expect("key");
+        let package = root.join("cobalt-0.3.3701-KoboRoot.tgz");
+        fs::write(&package, b"a device package").expect("package");
+        let out = root.join("release");
+        let run = |package: &Path, version: &str| {
+            command(&strings(&[
+                "platform",
+                "--package",
+                package.to_str().expect("path"),
+                "--version",
+                version,
+                "--source",
+                "0123456789abcdef0123456789abcdef01234567",
+                "--seed",
+                seed.to_str().expect("path"),
+                "--out",
+                out.to_str().expect("path"),
+            ]))
+        };
+        // The name must be the one a reader asks for, and the version three numbers.
+        assert!(run(&package, "0.3.3702").is_err());
+        assert!(!out.exists());
+        run(&package, "0.3.3701").expect("signed");
+
+        let manifest = fs::read(out.join("cobalt-device-manifest.txt")).expect("manifest");
+        let signature =
+            fs::read_to_string(out.join("cobalt-device-manifest.txt.sig")).expect("signature");
+        let parsed =
+            kobo_app_store::verify_device_manifest(&manifest, &signature, &key).expect("verifies");
+        assert_eq!(parsed.version, "0.3.3701");
+        let device = parsed.device().expect("device");
+        assert_eq!(device.name, "cobalt-0.3.3701-KoboRoot.tgz");
+        assert_eq!(
+            device.sha256,
+            kobo_net::sha256::hex_digest(b"a device package")
+        );
     }
 
     #[test]

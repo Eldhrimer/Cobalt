@@ -78,13 +78,13 @@ const READER_ADDRESS_VARIABLE: &str = "KOBO_READER_ADDRESS";
 /// The version this binary was compiled as, which is the version installed:
 /// the binaries and the installer travel together.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Where releases are published.
-const RELEASES: &str = "https://api.github.com/repos/BandarLabs/Cobalt/releases/latest";
+// Releases are published where `kobo_app_store::PLATFORM` says: the public
+// ones for a stock build, the owner's own for a build made as theirs.
 /// Only the newest few releases, because a hundred of them is a megabyte and
 /// a half of assets a reader downloads over their own Wi-Fi to learn one
 /// version number, and because that is how the feed outgrew its window.
 /// Betas and stables alternate, so fifteen always holds several betas.
-const BETA_RELEASES: &str = "https://api.github.com/repos/BandarLabs/Cobalt/releases?per_page=15";
+const BETA_RELEASE_COUNT: u32 = 15;
 
 /// How much of a release feed this reader will take.
 ///
@@ -1632,10 +1632,11 @@ impl Settings {
         self.update = UpdateFlow::Checking { channel };
         self.update_task = context.spawn(Task::Fetch {
             url: match channel {
-                UpdateChannel::Stable => RELEASES,
-                UpdateChannel::Beta => BETA_RELEASES,
-            }
-            .to_owned(),
+                UpdateChannel::Stable => kobo_app_store::PLATFORM.stable_releases_url(),
+                UpdateChannel::Beta => {
+                    kobo_app_store::PLATFORM.recent_releases_url(BETA_RELEASE_COUNT)
+                }
+            },
             offset: 0,
             max_bytes: release_window(channel),
             credential: None,
@@ -2779,9 +2780,10 @@ fn stable_release(value: &Value) -> Result<Release, String> {
     };
     let archive = url_of(&archive_name(&version))
         .ok_or_else(|| "The newest release has no download for this reader.".to_owned())?;
-    let manifest = url_of("cobalt-host-manifest.txt")
+    let metadata = kobo_app_store::PLATFORM.manifest_file();
+    let manifest = url_of(metadata)
         .ok_or_else(|| "The newest release publishes no signed metadata.".to_owned())?;
-    let signature = url_of("cobalt-host-manifest.txt.sig")
+    let signature = url_of(&format!("{metadata}.sig"))
         .ok_or_else(|| "The newest release publishes no metadata signature.".to_owned())?;
     Ok(Release {
         version,
@@ -2819,8 +2821,8 @@ fn release_value(value: &Value, tag_prefix: &str, prerelease: bool) -> Option<Re
     };
     Some(Release {
         archive: url_of(&archive_name(&version))?,
-        manifest: url_of("cobalt-host-manifest.txt")?,
-        signature: url_of("cobalt-host-manifest.txt.sig")?,
+        manifest: url_of(kobo_app_store::PLATFORM.manifest_file())?,
+        signature: url_of(&format!("{}.sig", kobo_app_store::PLATFORM.manifest_file()))?,
         version,
     })
 }
@@ -2830,7 +2832,9 @@ fn valid_release_url(url: &str) -> bool {
 }
 
 fn verified_device_digest(release: &Release, manifest: &[u8], signature: &str) -> Option<String> {
-    let manifest = kobo_app_store::verify_release_manifest(manifest, signature).ok()?;
+    let manifest = kobo_app_store::PLATFORM
+        .verify_manifest(manifest, signature)
+        .ok()?;
     device_digest_from_manifest(release, &manifest)
 }
 
@@ -3851,7 +3855,9 @@ mod tests {
     #[test]
     fn the_beta_feed_asks_for_few_enough_releases_to_stay_inside_its_window() {
         assert!(
-            super::BETA_RELEASES.ends_with("per_page=15"),
+            kobo_app_store::PLATFORM
+                .recent_releases_url(super::BETA_RELEASE_COUNT)
+                .ends_with("per_page=15"),
             "the whole list outgrew the window once and must not be asked for again"
         );
         assert!(
