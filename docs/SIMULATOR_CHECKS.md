@@ -128,6 +128,27 @@ The browser shell selects too: press on a word, keep the button down for half
 a second, and let go where the selection should end. Nothing is drawn while
 the button is down.
 
+## Editing in the runtime's text field
+
+While the runtime's text field is open (a `TextEntry`, see SDK.md, Typing),
+the same steps reach its text, through the same field code the reader runs:
+
+| step | in the field's text |
+| --- | --- |
+| `tap-at X,Y` | puts the caret at the nearest character boundary |
+| `drag-at X1,Y1 X2,Y2` | selects from the first point to the second, by character; the hold before the slide changes nothing here |
+| `double-tap-at X,Y` | selects the word |
+
+`tap` and `type` press keys as before: a key types at the caret, or over the
+selection, and backspace deletes the selection or the character before the
+caret. A step that lands outside the text but on nothing at all drops a
+selection. Two `tap-at` steps are two taps however quickly they follow each
+other; a word is selected by `double-tap-at`. Coordinates are panel
+coordinates, as for every other step; the entry's lines are one `RichText`
+node in the layout JSON, and its first line starts at the left of that node.
+A long entry shows `Earlier` and `Later` under its lines, which a route taps
+by label. A secret field takes no touch in its text.
+
 ## Extra routes
 
 An app's `drive.kobo` runs from the seeded state above. Any
