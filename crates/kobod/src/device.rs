@@ -2610,6 +2610,19 @@ fn host_applications(
         // When and where the finger landed, for telling a tap from a hold.
         let gesture_started = Instant::now();
         let mut holds = kobo_hal::gesture::HoldTracker::default();
+        // Text selection on screens that ask for it; see [`kobo_ui::select`].
+        // Fed on the same clock as `holds`, in logical coordinates.
+        let mut selector = kobo_ui::TextSelector::default();
+        // The surface a drawn selection is on: which application, and how
+        // many screens it had drawn. When either moves the surface was
+        // redrawn without the selection.
+        let mut selection_key: Option<(u64, u32)> = None;
+        let mut selection_front = front;
+        // A quick tap on a word, held back for the double-tap window, as the
+        // physical release it was; and touches to handle again, ahead of the
+        // input queue, without asking the selector a second time.
+        let mut deferred_up: Option<TouchEvent> = None;
+        let mut replays: std::collections::VecDeque<TouchEvent> = std::collections::VecDeque::new();
         // Updates the background checker found, held until the panel has been
         // quiet long enough to apply them. A newer report replaces an older
         // one outright: the newer one was computed against newer facts.
@@ -2640,6 +2653,62 @@ fn host_applications(
             if release_due.is_some_and(|(deadline, _)| now >= deadline) {
                 let (_, damage) = release_due.take().expect("release deadline existed");
                 panel.paint_feedback(display, whole_screen, &surface, damage)?;
+            }
+            // A selection belongs to the surface it was drawn on. Another
+            // application in front means none at all; a redraw of the same
+            // one means drawing it again, or letting it go.
+            if selection_front != front {
+                selector.reset();
+                deferred_up = None;
+                selection_key = None;
+                selection_front = front;
+            }
+            let gesture_millis =
+                u64::try_from(gesture_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            if let Some(index) = index_of(&apps, front) {
+                let key = (front, apps[index].painted);
+                if selector.is_active() && selection_key != Some(key) {
+                    selection_key = Some(key);
+                    let at_home = apps[index].path == home;
+                    let appearance = appearance_of(display);
+                    let step = selector.repainted(&mut || {
+                        selectable_layout(&apps[index], at_home, &mut status, appearance)
+                    });
+                    apply_selection(
+                        step,
+                        &mut apps[index],
+                        display,
+                        whole_screen,
+                        &mut surface,
+                        &mut panel,
+                        &mut release_due,
+                    )?;
+                }
+                if selector
+                    .deadline()
+                    .is_some_and(|deadline| gesture_millis >= deadline)
+                {
+                    let at_home = apps[index].path == home;
+                    let appearance = appearance_of(display);
+                    let outcome = selector.expire(gesture_millis, &mut || {
+                        selectable_layout(&apps[index], at_home, &mut status, appearance)
+                    });
+                    if outcome.replay {
+                        replays.extend(deferred_up.take());
+                    }
+                    if apply_selection(
+                        outcome.step,
+                        &mut apps[index],
+                        display,
+                        whole_screen,
+                        &mut surface,
+                        &mut panel,
+                        &mut release_due,
+                    )? {
+                        holds.observe(TouchEvent::Cancel, gesture_millis);
+                        selection_key = Some(key);
+                    }
+                }
             }
             // The band is the only thing on the panel that changes without
             // anybody touching it, so the loop has to notice it on its own.
@@ -2852,8 +2921,16 @@ fn host_applications(
                 }))
                 .min(notice_up.as_ref().map_or(BEAT_INTERVAL, |(until, _)| {
                     until.saturating_duration_since(now)
+                }))
+                .min(selector.deadline().map_or(BEAT_INTERVAL, |deadline| {
+                    Duration::from_millis(deadline.saturating_sub(gesture_millis))
                 }));
-            match events.recv_timeout(wait) {
+            // A replayed touch has already been past the selector once.
+            let (received, replayed) = match replays.pop_front() {
+                Some(event) => (Ok(Event::Touch(event)), true),
+                None => (events.recv_timeout(wait), false),
+            };
+            match received {
                 Ok(Event::Stopping(number)) => {
                     return Ok(finish(
                         &apps,
@@ -3084,6 +3161,48 @@ fn host_applications(
                     let screen = screen.map(|screen| shown_screen(&apps[index], screen, &chrome));
                     let orientation = apps[index].orientation;
                     let landscape_turn = apps[index].landscape_turn;
+                    // Text selection, ahead of press feedback. On a screen
+                    // that did not ask for it every touch passes straight
+                    // through without the screen being laid out.
+                    if let Some(touch) = (!replayed)
+                        .then(|| selector_touch(event, orientation, landscape_turn))
+                        .flatten()
+                    {
+                        let millis = u64::try_from(gesture_started.elapsed().as_millis())
+                            .unwrap_or(u64::MAX);
+                        let appearance = appearance_of(display);
+                        let outcome = selector.touch(touch, millis, &mut || {
+                            selectable_layout(&apps[index], at_home, &mut status, appearance)
+                        });
+                        if outcome.replay {
+                            // The held-back tap first, as the tap it was,
+                            // then this touch as if nothing had intervened.
+                            replays.extend(deferred_up.take());
+                            replays.push_back(event);
+                            continue;
+                        }
+                        if outcome.step == kobo_ui::select::Step::Defer {
+                            deferred_up = Some(event);
+                            holds.observe(TouchEvent::Cancel, millis);
+                            continue;
+                        }
+                        let paints = matches!(outcome.step, kobo_ui::select::Step::Paint { .. });
+                        if apply_selection(
+                            outcome.step,
+                            &mut apps[index],
+                            display,
+                            whole_screen,
+                            &mut surface,
+                            &mut panel,
+                            &mut release_due,
+                        )? {
+                            holds.observe(TouchEvent::Cancel, millis);
+                            if paints {
+                                selection_key = Some((front, apps[index].painted));
+                            }
+                            continue;
+                        }
+                    }
                     // A control shows that it has been touched, before
                     // anything it does can be seen. Without this the panel is
                     // simply still for as long as the application takes to
@@ -3447,6 +3566,10 @@ fn host_applications(
                             apps[index].orientation = orientation;
                             redraw_field(&mut apps[index]);
                             if id == front {
+                                // Redrawn below without a new screen, so
+                                // nothing would say the selection is gone.
+                                selector.reset();
+                                deferred_up = None;
                                 if let Some(screen) = visible(&apps[index]) {
                                     let chrome = chrome_for(
                                         &screen,
@@ -5619,6 +5742,138 @@ fn page_key_message(
             trace("page key dropped: an overlay is up");
             println!("page key dropped: an overlay is up");
             None
+        }
+    }
+}
+
+/// A touch as the text selector reads it: in the logical coordinates the
+/// screen was laid out in. `None` for a touch outside the signed range,
+/// which cannot be on any word.
+fn selector_touch(
+    event: TouchEvent,
+    orientation: kobo_ui::Orientation,
+    landscape_turn: kobo_ui::LandscapeTurn,
+) -> Option<kobo_ui::select::Touch> {
+    let logical = |x: u32, y: u32| {
+        let (Ok(x), Ok(y)) = (i32::try_from(x), i32::try_from(y)) else {
+            return None;
+        };
+        let physical = crate::device_metrics();
+        Some(kobo_ui::logical_point_with_turn(
+            orientation,
+            landscape_turn,
+            physical.width,
+            physical.height,
+            x,
+            y,
+        ))
+    };
+    Some(match event {
+        TouchEvent::Down { x, y } => {
+            let (x, y) = logical(x, y)?;
+            kobo_ui::select::Touch::Down { x, y }
+        }
+        TouchEvent::Move { x, y } => {
+            let (x, y) = logical(x, y)?;
+            kobo_ui::select::Touch::Move { x, y }
+        }
+        TouchEvent::Up { x, y } => {
+            let (x, y) = logical(x, y)?;
+            kobo_ui::select::Touch::Up { x, y }
+        }
+        TouchEvent::Cancel => kobo_ui::select::Touch::Cancel,
+    })
+}
+
+/// The layout a finger on `app`'s words may select text on, or `None` when
+/// it may not: the screen did not ask, an overlay is up, or a text field the
+/// runtime draws is open. Laid out exactly as it was drawn.
+fn selectable_layout(
+    app: &Hosted,
+    at_home: bool,
+    status: &mut StatusSource,
+    appearance: Appearance,
+) -> Option<Layout> {
+    if app.typing.is_some() {
+        return None;
+    }
+    let screen = app.screen.as_ref()?;
+    if !screen.text_select || screen.hold.is_none() || screen.overlay.is_some() {
+        return None;
+    }
+    let chrome = chrome_for(screen, at_home, status, appearance);
+    let screen = shown_screen(app, screen.clone(), &chrome);
+    let layout = screen.layout_with(&metrics_for(&screen).oriented(app.orientation), &chrome);
+    layout.text_select.then_some(layout)
+}
+
+/// Carries out what the selector asked for. True when the touch was the
+/// selector's, and nothing else is to be done with it.
+///
+/// A paint inverts the rectangles on the surface and refreshes them at once,
+/// as a pressed control is drawn. A finished gesture puts the surface back
+/// without refreshing, and leaves the refresh to the application's answer or,
+/// if none comes promptly, to the release deadline, exactly as a released
+/// control does; then the gesture is sent.
+fn apply_selection(
+    step: kobo_ui::select::Step,
+    app: &mut Hosted,
+    display: &DisplaySession,
+    whole_screen: Rect,
+    surface: &mut Surface,
+    panel: &mut Painter,
+    release_due: &mut Option<(Instant, kobo_ui::Rect)>,
+) -> Result<bool, String> {
+    let invert_all = |surface: &mut Surface, invert: &[kobo_ui::Rect]| {
+        let physical = crate::device_metrics();
+        let rects = invert
+            .iter()
+            .map(|rect| {
+                physical_feedback_rect(*rect, app.orientation, app.landscape_turn, &physical)
+            })
+            .collect::<Vec<_>>();
+        for rect in &rects {
+            surface.invert_rounded(*rect, 0);
+        }
+        kobo_ui::select::bounds(&rects)
+    };
+    match step {
+        kobo_ui::select::Step::Pass => Ok(false),
+        kobo_ui::select::Step::Quiet | kobo_ui::select::Step::Defer => Ok(true),
+        kobo_ui::select::Step::Paint { invert } => {
+            if let Some(damage) = invert_all(surface, &invert) {
+                panel.paint_feedback(display, whole_screen, surface, damage)?;
+            }
+            Ok(true)
+        }
+        kobo_ui::select::Step::Done { gesture, invert } => {
+            if let Some(damage) = invert_all(surface, &invert) {
+                if let Some((_, older)) = release_due.take() {
+                    panel.paint_feedback(display, whole_screen, surface, older)?;
+                }
+                *release_due = Some((
+                    Instant::now() + release_grace(FeedbackKind::Control),
+                    damage,
+                ));
+            }
+            if let Some((action, gesture)) = gesture {
+                kobo_protocol::write_to(
+                    &mut app.stream,
+                    &Frame {
+                        version: app.protocol,
+                        request_id: 0,
+                        message: Message::TextGesture {
+                            action,
+                            kind: gesture.kind,
+                            context: gesture.hit.context,
+                            start: gesture.hit.start,
+                            end: gesture.hit.end,
+                        },
+                    },
+                )
+                .map_err(|error| format!("deliver a text gesture: {error}"))?;
+            }
+            Ok(true)
         }
     }
 }
