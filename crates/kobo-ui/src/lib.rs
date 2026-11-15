@@ -14,6 +14,7 @@
 mod board;
 mod notice;
 pub use notice::notice_rect;
+pub mod edit;
 pub mod keyboard;
 mod pencil;
 pub use board::{BoardCell, BoardClue, BoardMark, BoardSurface};
