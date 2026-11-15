@@ -87,14 +87,41 @@ fn tap(app: &mut Hosted, action: ActionId) -> Tap {
         x: u32::try_from(rect.x + rect.width / 2).expect("on the panel"),
         y: u32::try_from(rect.y + rect.height / 2).expect("on the panel"),
     };
+    touch(app, event, 0)
+}
+
+/// Sends one touch, at `millis` on the gesture clock, to the field as drawn.
+fn touch(app: &mut Hosted, event: TouchEvent, millis: u64) -> Tap {
+    let screen = visible(app).expect("a field is drawn");
+    let chrome = Chrome::for_screen(&screen, false, None);
     type_into(
         app,
         event,
         Some(&screen),
         &chrome,
         kobo_ui::LandscapeTurn::Clockwise,
+        millis,
     )
-    .expect("the tap is routed")
+    .expect("the touch is routed")
+}
+
+/// Where the entry's text is drawn: its first line's top left corner, and
+/// the height of a line.
+fn entry(app: &Hosted) -> (u32, u32, u32) {
+    let screen = visible(app).expect("a field is drawn");
+    let chrome = Chrome::for_screen(&screen, false, None);
+    let layout = screen.layout_with(&super::metrics_for(&screen), &chrome);
+    let line = layout
+        .nodes
+        .iter()
+        .find(|node| {
+            matches!(node.kind, LayoutKind::RichText(_) | LayoutKind::Text)
+                && !node.text_lines.is_empty()
+        })
+        .expect("the entry is drawn")
+        .rect;
+    let at = |value: i32| u32::try_from(value).expect("on the panel");
+    (at(line.x), at(line.y), at(line.height))
 }
 
 fn answer(client: &mut std::os::unix::net::UnixStream, request_id: u32) -> TextOutcome {
@@ -159,5 +186,101 @@ fn a_secret_an_application_may_not_keep_is_refused_without_drawing_a_keyboard() 
         answer(&mut client, 5),
         TextOutcome::Denied(DenyReason::NotDeclared)
     );
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn a_finger_in_the_text_places_the_caret_and_drags_out_a_selection() {
+    let (mut app, mut client, root) = hosted("todo");
+    let mut request = ask(FieldKind::Prose);
+    if let kobo_protocol::DeviceRequest::TypeText { initial, .. } = &mut request {
+        *initial = "milk eggs".into();
+    }
+    open_text_field(&mut app, 6, &request).unwrap();
+    let (x, y, height) = entry(&app);
+    let middle = y + height / 2;
+    // At the very start of the line: the caret goes before the first letter.
+    assert_eq!(
+        touch(&mut app, TouchEvent::Down { x, y: middle }, 0),
+        Tap::Redraw
+    );
+    assert_eq!(
+        touch(&mut app, TouchEvent::Up { x, y: middle }, 30),
+        Tap::Handled
+    );
+    tap(&mut app, ActionId::from_name("kb.r0c0"));
+    assert!(format!("{:?}", visible(&app)).contains("q|milk eggs"));
+    // Pressed at the start and dragged far to the right: everything after
+    // the caret is selected, and the next key replaces it.
+    touch(
+        &mut app,
+        TouchEvent::Down {
+            x: x + 1,
+            y: middle,
+        },
+        1000,
+    );
+    touch(
+        &mut app,
+        TouchEvent::Move {
+            x: x + 2000,
+            y: middle,
+        },
+        1050,
+    );
+    assert_eq!(
+        touch(
+            &mut app,
+            TouchEvent::Up {
+                x: x + 2000,
+                y: middle
+            },
+            1100
+        ),
+        Tap::Handled
+    );
+    tap(&mut app, ActionId::from_name("kb.r0c1"));
+    assert_eq!(tap(&mut app, ActionId::from_name("kb.enter")), Tap::Handled);
+    assert_eq!(answer(&mut client, 6), TextOutcome::Typed("w".into()));
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn a_finger_in_a_secret_moves_nothing_and_shows_nothing() {
+    let (mut app, mut client, root) = hosted("lichess");
+    open_text_field(&mut app, 8, &ask(FieldKind::Secret)).unwrap();
+    for key in ["kb.r0c0", "kb.r0c1", "kb.r0c2"] {
+        tap(&mut app, ActionId::from_name(key));
+    }
+    let before = format!("{:?}", visible(&app));
+    let (x, y, height) = entry(&app);
+    let middle = y + height / 2;
+    for (event, at) in [
+        (TouchEvent::Down { x, y: middle }, 0),
+        (
+            TouchEvent::Move {
+                x: x + 400,
+                y: middle,
+            },
+            20,
+        ),
+        (
+            TouchEvent::Up {
+                x: x + 400,
+                y: middle,
+            },
+            40,
+        ),
+    ] {
+        assert_eq!(touch(&mut app, event, at), Tap::Handled);
+    }
+    assert_eq!(format!("{:?}", visible(&app)), before);
+    tap(&mut app, ActionId::from_name("kb.r0c3"));
+    assert!(
+        format!("{:?}", visible(&app)).contains("4 characters entered"),
+        "typed at the end as ever"
+    );
+    tap(&mut app, ActionId::BACK);
+    assert_eq!(answer(&mut client, 8), TextOutcome::Cancelled);
     std::fs::remove_dir_all(root).ok();
 }
