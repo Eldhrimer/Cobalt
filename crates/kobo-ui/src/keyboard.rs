@@ -18,13 +18,17 @@
 //! out of step with what is drawn. It is also what lets `kobo drive type` find
 //! a key whether the runtime or an application drew it.
 //!
-//! ## Why there is no cursor
+//! ## The caret
 //!
-//! Text is only ever appended to or deleted from the end. Moving a caret needs
-//! a caret to be visible, which needs a repaint per tap on a panel that takes
-//! tens of milliseconds a repaint, and the payoff is editing in the middle of
-//! a search query.
+//! The text is a [`TextEdit`], so it has a caret and may have a selection:
+//! a key types at the caret, in place of the selection, and backspace takes
+//! the character before the caret or the selection. A keyboard starts with
+//! its caret at the end and nothing here moves it, so a keyboard an
+//! application draws itself, with nowhere to tap a caret into, still appends
+//! and deletes at the end. A field drawn with somewhere to tap places the
+//! caret and selects through [`Keyboard::edit_mut`].
 
+use crate::edit::TextEdit;
 use crate::{ActionId, Cell, CellTone, FieldKind, Glyph};
 
 /// The longest string the keyboard will accumulate, in characters.
@@ -142,7 +146,7 @@ impl Key {
 /// An on-screen keyboard and the text typed on it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Keyboard {
-    text: String,
+    text: TextEdit,
     shift: bool,
     layer: Layer,
     kind: FieldKind,
@@ -251,25 +255,41 @@ impl Keyboard {
         Self::new().typed(text)
     }
 
-    /// The same keyboard with `text` appended, truncated to [`MAX_TEXT`].
+    /// The same keyboard with `text` typed at the caret, truncated to
+    /// [`Self::limit`].
     #[must_use]
     pub fn typed(mut self, text: impl Into<String>) -> Self {
-        for character in text.into().chars() {
-            self.push(character);
-        }
+        self.text.insert(&text.into());
         self
     }
 
     #[must_use]
     pub fn text(&self) -> &str {
+        self.text.text()
+    }
+
+    /// The text with its caret and selection.
+    #[must_use]
+    pub const fn edit(&self) -> &TextEdit {
         &self.text
+    }
+
+    /// The text with its caret and selection, to place the caret or select.
+    pub fn edit_mut(&mut self) -> &mut TextEdit {
+        &mut self.text
+    }
+
+    /// The most characters this keyboard will hold.
+    #[must_use]
+    pub const fn limit(&self) -> usize {
+        self.text.max_chars()
     }
 
     /// How many characters have been typed, which is what a reader comparing
     /// a token against the length a service printed wants to know.
     #[must_use]
-    pub fn count(&self) -> usize {
-        self.text.chars().count()
+    pub const fn count(&self) -> usize {
+        self.text.count()
     }
 
     #[must_use]
@@ -298,7 +318,7 @@ impl Keyboard {
 
     /// Takes the text, leaving the keyboard empty and ready for the next entry.
     pub fn take(&mut self) -> String {
-        std::mem::take(&mut self.text)
+        self.text.take()
     }
 
     /// Applies `action` if it belongs to the keyboard.
@@ -335,9 +355,10 @@ impl Keyboard {
             // By character, not by byte. Truncating a multi-byte character
             // would leave the string invalid, and this is the one operation a
             // reader repeats without looking.
-            self.text.pop();
+            self.text.backspace();
             return Some(Pressed::Edited);
         }
+
         if action == ActionId::from_name(ENTER) {
             return Some(Pressed::Submitted);
         }
@@ -490,9 +511,7 @@ impl Keyboard {
     fn push(&mut self, character: char) {
         // Counted in characters rather than bytes so the limit means the same
         // thing whatever alphabet the reader is using.
-        if self.count() < MAX_TEXT {
-            self.text.push(character);
-        }
+        self.text.insert(character.encode_utf8(&mut [0; 4]));
     }
 }
 
