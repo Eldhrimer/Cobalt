@@ -24,6 +24,7 @@ impl ScreenBuilder {
             page_turns: None,
             turn_extras: (None, None),
             hold: None,
+            text_select: false,
             owns_back: false,
             text_scale: None,
             overlay: None,
@@ -1293,6 +1294,31 @@ impl ScreenBuilder {
     #[must_use]
     pub fn hold(mut self, action: impl AsRef<str>) -> Self {
         self.hold = Some(self.register(action.as_ref()));
+        self
+    }
+
+    /// Lets a finger select the screen's selectable text, and sends what it
+    /// chose to [`crate::KoboApp::on_text_gesture`] with `action`.
+    ///
+    /// Held still on a word, a finger starts a selection while it is still
+    /// down; dragging extends it, within the same text context, and lifting
+    /// sends the range as [`crate::TextGestureKind::Select`]. Two quick taps
+    /// on a word send [`crate::TextGestureKind::DoubleTap`], and a quick tap
+    /// followed by a held second contact
+    /// [`crate::TextGestureKind::DoubleTapHold`], each naming the word: what
+    /// a sentence or a paragraph is, the application decides.
+    ///
+    /// Also sets [`ScreenBuilder::hold`] to `action`, so a hold that starts
+    /// off every word is the ordinary hold it always was.
+    ///
+    /// The cost: a quick tap that lands on a word is held back for the
+    /// double-tap window, about a third of a second, before it is delivered
+    /// as the tap it was. Taps on controls, margins and blank space are never
+    /// delayed.
+    #[must_use]
+    pub fn select_text(mut self, action: impl AsRef<str>) -> Self {
+        self.hold = Some(self.register(action.as_ref()));
+        self.text_select = true;
         self
     }
 
@@ -3044,6 +3070,7 @@ impl ScreenBuilder {
             bottom_action: self.bottom_action,
             page_turns: self.page_turns,
             hold: self.hold,
+            text_select: self.text_select && self.hold.is_some(),
             owns_back: self.owns_back,
             text_scale: self.text_scale,
             overlay: self.overlay,

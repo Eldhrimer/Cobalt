@@ -1052,6 +1052,7 @@ fn serve_application(
             | Message::Welcome { .. }
             | Message::Action { .. }
             | Message::TextHold { .. }
+            | Message::TextGesture { .. }
             | Message::TaskOutcome { .. }
             | Message::DeviceResult(_)
             | Message::StoreResult(_)

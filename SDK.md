@@ -235,6 +235,8 @@ pub trait KoboApp {
     fn accent(&self) -> Option<Accent> { None }
     // Defaults to on_action, for apps that have not opted into word selection.
     fn on_text_hold(&mut self, context: &mut Context, action: ActionId, hit: TextHit) {}
+    // Only on a screen built with select_text. Does nothing by default.
+    fn on_text_gesture(&mut self, context: &mut Context, action: ActionId, gesture: TextGesture) {}
     fn on_resume(&mut self, context: &mut Context) {}
     // Defaults to on_background.
     fn on_suspend(&mut self, context: &mut Context) {}
@@ -262,6 +264,41 @@ it cannot start work.
 
 `fn main` is `kobo_sdk::run("name", app)`, which reads the socket path from
 `KOBO_SOCKET`. Use `run_on` to name a socket yourself.
+
+### Selecting text
+
+A reading screen whose words are selectable (built with the `selectable_*`
+text components) can hear a single held word with `hold(name)` and
+`on_text_hold`, as it always could. `select_text(name)` asks for more: the
+reader chooses text with a finger while it is still down.
+
+- **Hold, then drag.** A finger still on a word for half a second starts a
+  selection, drawn inverted at once. Dragging extends it to the word nearest
+  the finger, forwards or backwards, but never out of that word's text
+  `context`. Lifting sends `TextGestureKind::Select` with the range from the
+  lowest start to the highest end; a hold released without moving sends the
+  one word.
+- **Double tap** on a word sends `TextGestureKind::DoubleTap` with that word.
+- **Double tap and hold** (the second contact stays still for half a second)
+  inverts every visible word of the context and, on lifting, sends
+  `TextGestureKind::DoubleTapHold` with the word.
+
+All three arrive at `on_text_gesture(context, action, gesture)`, where
+`gesture.hit` is a `TextHit` in your own coordinates. The runtime only names
+the word and the gesture: what a sentence or a paragraph is, the application
+decides. `on_text_gesture` does nothing unless you override it. A hold that
+starts off every word is still the ordinary hold and reaches `on_action`.
+
+The price is paid on taps that land on words. A quick tap on a word is held
+back for the double-tap window, about a third of a second, and then delivered
+as the tap it was (on a reading page, usually a page turn). Taps on controls,
+margins and blank space are never delayed, and a screen that does not ask for
+`select_text` behaves exactly as before.
+
+`AppRunner::text_gesture(action, gesture)` drives the callback from a test.
+In the simulator, the `hold-at`, `drag-at`, `double-tap-at` and
+`double-hold-at` route steps make the gestures; see the route step table
+below and docs/SIMULATOR_CHECKS.md.
 
 ---
 
@@ -300,6 +337,7 @@ the actual E Ink renderer and is the quickest visual reference.
 | `page_rail(page, total)` | A passive page rail in the right margin, with a zero-based `page`. Needs `page_turns`. |
 | `reading_menu(name)` | Adds a middle page-turn zone for a reader's controls. |
 | `hold(name)` | Sends an action when the content area is held. |
+| `select_text(name)` | `hold(name)`, and a finger on a word selects text: see [Selecting text](#selecting-text). |
 | `tabs(selected, [(name, label), ...])` | A row of tabs over one region of the screen. |
 
 ### Text and document content
@@ -1910,6 +1948,9 @@ A script is one step per line; `#` is a comment.
 | `tap-id ACTION` | taps the control raising `ACTION`, by stable action name or numeric ID |
 | `tap-at X,Y` | taps a point, for a control with no words |
 | `hold-at X,Y` | holds a point for the hold time, for an app that selects words (the layout JSON's `textHits` gives each word's rectangle) |
+| `drag-at X1,Y1 X2,Y2` | holds the first point for the hold time, slides to the second and lifts: a selection, on a `select_text` screen |
+| `double-tap-at X,Y` | two quick taps on a point, on a `select_text` screen |
+| `double-hold-at X,Y` | a quick tap, then a second contact held on the same point, on a `select_text` screen |
 | `type TEXT` | taps the on-screen key for each character in turn |
 | `expect TEXT` | fails unless something on the screen says it |
 | `expect-missing TEXT` | fails if something does |

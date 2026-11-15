@@ -1,8 +1,8 @@
 //! Reviewed Drafter gateway routes for an account bound to its owner's server.
 //! The contract is documented in apps/drafter/README.md.
 //!
-//! The token is only ever attached to five routes under the saved server, and
-//! the two writes carry exactly the fields the gateway documents. A compromised
+//! The token is only ever attached to six routes under the saved server, and
+//! the three writes carry exactly the fields the gateway documents. A compromised
 //! app cannot turn the token into anything else: no other path, no other
 //! method, no extra fields.
 use kobo_json::Value;
@@ -48,6 +48,7 @@ pub(super) fn allowed(
                 && body.is_some_and(|body| match route {
                     "/reviews" => review_body(body),
                     "/commits" => commit_body(body),
+                    "/discards" => discard_body(body),
                     _ => false,
                 })
         }
@@ -211,6 +212,18 @@ fn commit_body(body: &str) -> bool {
         })
 }
 
+/// Throwing a result away names the review and nothing else.
+fn discard_body(body: &str) -> bool {
+    if body.len() > MAX_BODY {
+        return false;
+    }
+    let Ok(root) = kobo_json::parse(body) else {
+        return false;
+    };
+    fields(&root, &["review_id"])
+        .is_some_and(|values| values[0].as_str().is_some_and(|id| hex(id, 64)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,9 +381,62 @@ mod tests {
     }
 
     #[test]
+    fn a_discard_names_a_review_and_nothing_else() {
+        let ok = format!(r#"{{"review_id":"{REVIEW}"}}"#);
+        assert!(request("/discards", CredentialUse::Post, Some(&ok)));
+        assert!(request(
+            "/discards",
+            CredentialUse::Post,
+            Some(&format!(r#"{{ "review_id" : "{REVIEW}" }}"#))
+        ));
+        for body in [
+            format!(r#"{{"review_id":"{REVIEW}","decisions":[]}}"#),
+            format!(r#"{{"review_id":"{REVIEW}","review_id":"{REVIEW}"}}"#),
+            format!(r#"{{"review_id":"{}"}}"#, REVIEW.to_uppercase()),
+            format!(r#"{{"review_id":"{}"}}"#, &REVIEW[..63]),
+            format!(r#"{{"review_id":"{REVIEW}0"}}"#),
+            r#"{"review_id":null}"#.to_owned(),
+            r#"{"review_id":1}"#.to_owned(),
+            r#"{"id":"ab12"}"#.to_owned(),
+            format!(r#"["{REVIEW}"]"#),
+            "{}".to_owned(),
+            "not json".to_owned(),
+        ] {
+            assert!(
+                !request("/discards", CredentialUse::Post, Some(&body)),
+                "{body}"
+            );
+        }
+        assert!(!request("/discards", CredentialUse::Fetch, None));
+        assert!(!request(
+            "/discards",
+            CredentialUse::Post,
+            Some(&" ".repeat(MAX_BODY + 1))
+        ));
+        assert!(!allowed(
+            &Credential::bearer("wu-drafter"),
+            SERVER,
+            &format!("{SERVER}/discards"),
+            CredentialUse::Post,
+            Some(&ok),
+            Some("text/plain"),
+        ));
+        assert!(!request(
+            &format!("/discards/{REVIEW}"),
+            CredentialUse::Post,
+            Some(&ok)
+        ));
+    }
+
+    #[test]
     fn writes_other_than_post_are_never_allowed() {
         for usage in [CredentialUse::Put, CredentialUse::Patch] {
             assert!(!request("/reviews", usage, Some(&review("[]"))));
+            assert!(!request(
+                "/discards",
+                usage,
+                Some(&format!(r#"{{"review_id":"{REVIEW}"}}"#))
+            ));
         }
     }
 

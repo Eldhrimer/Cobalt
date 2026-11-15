@@ -47,10 +47,11 @@ pub use kobo_ui::{
     FontHandle, Freeform, Glyph, InlineFormula, LayoutIssue, LayoutIssueKind, NavBar, Node, NodeId,
     Orientation, Overlay, OverlayKind, ParagraphAlignment, ParagraphPresentation, Percent,
     PictureFormat, PictureHandle, ProseArea, RichTextSpan, Row, RowLead, RowState, Screen,
-    ScreenAccent, SlotWidth, Space, TableRow, TextHit, TextPresentation, TextSelection, Tile,
-    TilePicture, TileShape, TileState, TopBar, TransferFailure, CLARA_BW_METRICS, MAX_BAND_SLOTS,
-    MAX_CELLS, MAX_CHIPS, MAX_CHOICE_OPTIONS, MAX_COLUMNS, MAX_INLINE_FORMULAE, MAX_QUOTE_DEPTH,
-    MAX_ROWS, MAX_TABS, MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, TILE_BADGE_LIMIT,
+    ScreenAccent, SlotWidth, Space, TableRow, TextGesture, TextGestureKind, TextHit,
+    TextPresentation, TextSelection, Tile, TilePicture, TileShape, TileState, TopBar,
+    TransferFailure, CLARA_BW_METRICS, MAX_BAND_SLOTS, MAX_CELLS, MAX_CHIPS, MAX_CHOICE_OPTIONS,
+    MAX_COLUMNS, MAX_INLINE_FORMULAE, MAX_QUOTE_DEPTH, MAX_ROWS, MAX_TABS, MAX_TERMINAL_COLUMNS,
+    MAX_TERMINAL_ROWS, TILE_BADGE_LIMIT,
 };
 /// The runtime-drawn controls of protocol 16, and the limits that fix their
 /// footprints.
@@ -490,6 +491,8 @@ pub struct ScreenBuilder {
     /// until they arrive, so the order of the calls does not matter.
     turn_extras: (Option<(u16, u16)>, Option<ActionId>),
     hold: Option<ActionId>,
+    /// Set by [`ScreenBuilder::select_text`].
+    text_select: bool,
     owns_back: bool,
     text_scale: Option<kobo_ui::TextScale>,
     overlay: Option<Box<Overlay>>,
@@ -3025,6 +3028,17 @@ pub trait KoboApp {
         self.on_action(context, action);
     }
 
+    /// Receives text chosen with a finger on a screen built with
+    /// [`ScreenBuilder::select_text`]: the gesture, and the word or range in
+    /// stable application text coordinates. Does nothing unless overridden.
+    fn on_text_gesture(
+        &mut self,
+        _context: &mut Context,
+        _action: ActionId,
+        _gesture: TextGesture,
+    ) {
+    }
+
     fn on_resume(&mut self, _context: &mut Context) {}
 
     /// Save work before sleep. The SDK waits for the resulting acknowledgements.
@@ -3317,6 +3331,10 @@ impl<A: KoboApp> AppRunner<A> {
 
     pub fn text_hold(&mut self, action: ActionId, hit: TextHit) -> Vec<Command> {
         self.dispatch(|app, context| app.on_text_hold(context, action, hit))
+    }
+
+    pub fn text_gesture(&mut self, action: ActionId, gesture: TextGesture) -> Vec<Command> {
+        self.dispatch(|app, context| app.on_text_gesture(context, action, gesture))
     }
 
     pub fn resume(&mut self) -> Vec<Command> {
@@ -3672,6 +3690,10 @@ pub enum ClientEvent {
         action: ActionId,
         hit: TextHit,
     },
+    TextGesture {
+        action: ActionId,
+        gesture: TextGesture,
+    },
     Device(DeviceResult),
     Task {
         task: TaskId,
@@ -3931,6 +3953,23 @@ impl Client {
                     end,
                 },
             }),
+            Message::TextGesture {
+                action,
+                kind,
+                context,
+                start,
+                end,
+            } => Ok(ClientEvent::TextGesture {
+                action,
+                gesture: TextGesture {
+                    kind,
+                    hit: TextHit {
+                        context,
+                        start,
+                        end,
+                    },
+                },
+            }),
             Message::DeviceResult(result) => Ok(ClientEvent::Device(result)),
             Message::TaskOutcome { task, outcome } => Ok(ClientEvent::Task { task, outcome }),
             Message::StoreResult(result) => Ok(ClientEvent::Store(result)),
@@ -4118,6 +4157,80 @@ mod tests {
             1,
             "a transfer that has moved must still repaint"
         );
+    }
+
+    #[test]
+    fn a_screen_that_selects_text_hears_each_gesture_and_others_are_unchanged() {
+        #[derive(Default)]
+        struct Reader {
+            heard: Vec<(ActionId, TextGesture)>,
+            actions: Vec<ActionId>,
+        }
+        impl KoboApp for Reader {
+            fn on_start(&mut self, context: &mut Context) {
+                context.set_screen(
+                    ScreenBuilder::new("page")
+                        .text("Call me Ishmael.")
+                        .select_text("mark")
+                        .build(),
+                );
+            }
+            fn on_action(&mut self, _context: &mut Context, action: ActionId) {
+                self.actions.push(action);
+            }
+            fn on_text_gesture(
+                &mut self,
+                _context: &mut Context,
+                action: ActionId,
+                gesture: TextGesture,
+            ) {
+                self.heard.push((action, gesture));
+            }
+        }
+
+        // An application that never asked hears nothing, rather than an
+        // action it did not expect.
+        #[derive(Default)]
+        struct Quiet {
+            actions: Vec<ActionId>,
+        }
+        impl KoboApp for Quiet {
+            fn on_start(&mut self, _context: &mut Context) {}
+            fn on_action(&mut self, _context: &mut Context, action: ActionId) {
+                self.actions.push(action);
+            }
+        }
+        let screen = ScreenBuilder::new("page").select_text("mark").build();
+        assert_eq!(screen.hold, Some(action_id("mark")));
+        assert!(screen.text_select);
+        let plain = ScreenBuilder::new("page").hold("mark").build();
+        assert_eq!(plain.hold, Some(action_id("mark")));
+        assert!(!plain.text_select, "a hold alone selects nothing");
+
+        let mut runner = AppRunner::new(Reader::default());
+        let started = runner.start();
+        assert!(started
+            .iter()
+            .any(|command| matches!(command, Command::SetScreen(screen) if screen.text_select)));
+        let gesture = TextGesture {
+            kind: TextGestureKind::DoubleTapHold,
+            hit: TextHit {
+                context: 3,
+                start: 5,
+                end: 8,
+            },
+        };
+        runner.text_gesture(action_id("mark"), gesture);
+        assert_eq!(runner.app_mut().heard, vec![(action_id("mark"), gesture)]);
+        assert!(
+            runner.app_mut().actions.is_empty(),
+            "a gesture is not also an action"
+        );
+
+        let mut quiet = AppRunner::new(Quiet::default());
+        quiet.start();
+        quiet.text_gesture(action_id("mark"), gesture);
+        assert!(quiet.app_mut().actions.is_empty());
     }
 
     /// A picture arriving after the screen that refers to it still repaints.
@@ -5638,7 +5751,10 @@ pub fn run_on<A: KoboApp>(name: &str, app: A, socket: &Path) -> Result<(), Clien
                 ClientEvent::OpenDocument(id) => {
                     client.send_commands(runner.open_document(id))?;
                 }
-                ClientEvent::Action(_) | ClientEvent::TextHold { .. } | ClientEvent::Exit => break,
+                ClientEvent::Action(_)
+                | ClientEvent::TextHold { .. }
+                | ClientEvent::TextGesture { .. }
+                | ClientEvent::Exit => break,
             }
         }
         client.send_commands([Command::Exit])?;
@@ -5649,6 +5765,7 @@ pub fn run_on<A: KoboApp>(name: &str, app: A, socket: &Path) -> Result<(), Clien
         let commands = match client.next_event()? {
             ClientEvent::Action(action) => runner.action(action),
             ClientEvent::TextHold { action, hit } => runner.text_hold(action, hit),
+            ClientEvent::TextGesture { action, gesture } => runner.text_gesture(action, gesture),
             ClientEvent::Device(result) => runner.device_result(result),
             ClientEvent::Task { task, outcome } => runner.task_outcome(task, outcome),
             ClientEvent::Store(result) => runner.store_result(result),

@@ -22,6 +22,65 @@ fn a_text_hold_survives_the_wire_without_losing_its_range() {
 }
 
 #[test]
+fn a_text_gesture_survives_the_wire_with_its_kind_and_range() {
+    for kind in [
+        kobo_ui::TextGestureKind::Select,
+        kobo_ui::TextGestureKind::DoubleTap,
+        kobo_ui::TextGestureKind::DoubleTapHold,
+    ] {
+        let message = Message::TextGesture {
+            action: ActionId(9),
+            kind,
+            context: u64::MAX - 1,
+            start: 41,
+            end: 480,
+        };
+        assert_eq!(message_round_trip(message.clone()), message);
+    }
+}
+
+#[test]
+fn a_text_gesture_travels_on_its_own_tag_and_refuses_what_it_cannot_mean() {
+    let frame = Frame {
+        version: VERSION,
+        request_id: 0,
+        message: Message::TextGesture {
+            action: ActionId(9),
+            kind: kobo_ui::TextGestureKind::DoubleTap,
+            context: 3,
+            start: 4,
+            end: 9,
+        },
+    };
+    let bytes = encode(&frame).expect("encode");
+    assert_eq!(bytes[5], TEXT_GESTURE_TAG);
+    assert_eq!(bytes.len(), HEADER_LEN + 21);
+    // Kind, after the action.
+    let mut unknown = bytes.clone();
+    unknown[HEADER_LEN + 4] = 3;
+    assert_eq!(
+        decode(&unknown).map(|frame| frame.message),
+        Err(ProtocolError::InvalidValue("text gesture kind"))
+    );
+    // An empty range, on the way out and on the way in.
+    let mut empty = frame.clone();
+    if let Message::TextGesture { end, .. } = &mut empty.message {
+        *end = 4;
+    }
+    assert_eq!(
+        encode(&empty),
+        Err(ProtocolError::InvalidValue("text gesture range"))
+    );
+    let mut backwards = bytes;
+    let end = backwards.len() - 4;
+    backwards[end..].copy_from_slice(&2_u32.to_be_bytes());
+    assert_eq!(
+        decode(&backwards).map(|frame| frame.message),
+        Err(ProtocolError::InvalidValue("text gesture range"))
+    );
+}
+
+#[test]
 fn offline_dictionary_requests_and_entries_are_bounded_and_typed() {
     let request = Message::DeviceRequest(DeviceRequest::LookupWord {
         word: "café".into(),

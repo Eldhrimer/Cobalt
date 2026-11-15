@@ -101,6 +101,7 @@ impl Activity {
             message,
             Message::Action { .. }
                 | Message::TextHold { .. }
+                | Message::TextGesture { .. }
                 | Message::DeviceResult(_)
                 | Message::TaskOutcome { .. }
                 | Message::StoreResult(_)
