@@ -2,7 +2,8 @@
 //! The contract is documented in apps/drafter/README.md.
 //!
 //! The token is only ever attached to six routes under the saved server, and
-//! the three writes carry exactly the fields the gateway documents. A compromised
+//! the three writes carry exactly the fields the gateway documents (a review
+//! may also name its `mode`, "direct" or "batch"). A compromised
 //! app cannot turn the token into anything else: no other path, no other
 //! method, no extra fields.
 use kobo_json::Value;
@@ -166,13 +167,23 @@ fn review_body(body: &str) -> bool {
     let Ok(root) = kobo_json::parse(body) else {
         return false;
     };
-    let Some(values) = fields(&root, &["review_id", "section_id", "rev", "ops"]) else {
-        return false;
-    };
+    // `mode` is optional: a body without it is exactly the original shape.
+    let (values, mode_fine) =
+        if let Some(values) = fields(&root, &["review_id", "section_id", "rev", "ops"]) {
+            (values, true)
+        } else if let Some(mut values) =
+            fields(&root, &["review_id", "section_id", "rev", "ops", "mode"])
+        {
+            let mode = values.pop();
+            (values, mode.is_some_and(mode_ok))
+        } else {
+            return false;
+        };
     let [review_id, section_id, rev, ops] = values[..] else {
         return false;
     };
-    review_id.as_str().is_some_and(|id| hex(id, 64))
+    mode_fine
+        && review_id.as_str().is_some_and(|id| hex(id, 64))
         && section_id.as_str().is_some_and(|id| hex(id, 12))
         && rev.as_str().is_some_and(|r| {
             !r.is_empty()
@@ -183,6 +194,14 @@ fn review_body(body: &str) -> bool {
         && ops
             .as_array()
             .is_some_and(|list| list.len() <= MAX_OPS && list.iter().all(op_ok))
+}
+
+/// How the gateway should revise a review: at once, or collected into a
+/// Message Batch. Nothing else is a mode.
+fn mode_ok(value: &Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|mode| mode == "direct" || mode == "batch")
 }
 
 fn commit_body(body: &str) -> bool {
@@ -347,6 +366,68 @@ mod tests {
             "/reviews",
             CredentialUse::Post,
             Some(&" ".repeat(MAX_BODY + 1))
+        ));
+    }
+
+    #[test]
+    fn a_review_may_name_its_mode_and_only_direct_or_batch() {
+        let with = |mode: &str| {
+            format!(
+                r#"{{"review_id":"{REVIEW}","section_id":"a1b2c3d4e5f6","rev":"3f2a9c0d11aa","ops":[],"mode":{mode}}}"#
+            )
+        };
+        for mode in [r#""direct""#, r#""batch""#] {
+            assert!(
+                request("/reviews", CredentialUse::Post, Some(&with(mode))),
+                "{mode}"
+            );
+        }
+        let reordered = format!(
+            r#"{{"mode":"batch","ops":[],"rev":"3f2a9c0d11aa","section_id":"a1b2c3d4e5f6","review_id":"{REVIEW}"}}"#
+        );
+        assert!(request("/reviews", CredentialUse::Post, Some(&reordered)));
+        for mode in [
+            r#""Batch""#,
+            r#""""#,
+            r#""later""#,
+            r#""batch ""#,
+            "null",
+            "1",
+            "true",
+            r#"["batch"]"#,
+        ] {
+            assert!(
+                !request("/reviews", CredentialUse::Post, Some(&with(mode))),
+                "{mode}"
+            );
+        }
+        let twice = format!(
+            r#"{{"review_id":"{REVIEW}","section_id":"a1b2c3d4e5f6","rev":"r","ops":[],"mode":"batch","mode":"direct"}}"#
+        );
+        assert!(!request("/reviews", CredentialUse::Post, Some(&twice)));
+        let extra = format!(
+            r#"{{"review_id":"{REVIEW}","section_id":"a1b2c3d4e5f6","rev":"r","ops":[],"mode":"batch","extra":1}}"#
+        );
+        assert!(!request("/reviews", CredentialUse::Post, Some(&extra)));
+        let missing = format!(
+            r#"{{"review_id":"{REVIEW}","section_id":"a1b2c3d4e5f6","ops":[],"mode":"batch"}}"#
+        );
+        assert!(!request("/reviews", CredentialUse::Post, Some(&missing)));
+        let bad_op = format!(
+            r#"{{"review_id":"{REVIEW}","section_id":"a1b2c3d4e5f6","rev":"r","ops":[{{"op":"explode"}}],"mode":"batch"}}"#
+        );
+        assert!(!request("/reviews", CredentialUse::Post, Some(&bad_op)));
+        assert!(!request(
+            "/commits",
+            CredentialUse::Post,
+            Some(&format!(
+                r#"{{"review_id":"{REVIEW}","decisions":[],"mode":"batch"}}"#
+            ))
+        ));
+        assert!(!request(
+            "/discards",
+            CredentialUse::Post,
+            Some(&format!(r#"{{"review_id":"{REVIEW}","mode":"batch"}}"#))
         ));
     }
 
