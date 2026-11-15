@@ -3044,6 +3044,7 @@ impl ScreenBuilder {
             bottom_action: self.bottom_action,
             page_turns: self.page_turns,
             hold: self.hold,
+            text_select: false,
             owns_back: self.owns_back,
             text_scale: self.text_scale,
             overlay: self.overlay,

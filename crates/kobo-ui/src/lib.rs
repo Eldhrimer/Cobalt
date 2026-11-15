@@ -18,6 +18,8 @@ pub mod keyboard;
 mod pencil;
 pub use board::{BoardCell, BoardClue, BoardMark, BoardSurface};
 pub use pencil::{PencilBoard, PencilEdge, PencilMark, PencilMarkKind};
+pub mod select;
+pub use select::{TextGesture, TextGestureKind, TextSelector};
 
 use std::cmp::{max, min};
 use std::collections::BTreeMap;
@@ -1974,6 +1976,16 @@ pub struct Screen {
     /// still presses the button and holding under an overlay does nothing.
     pub hold: Option<ActionId>,
 
+    /// Whether a finger on a word selects text while it is still down: held
+    /// and dragged over a run of words, tapped twice, or tapped and then held.
+    /// What it chose is sent to the [`Screen::hold`] action as a
+    /// [`TextGesture`]; see [`select`]. Meaningless without a hold action.
+    ///
+    /// The price is a quick tap on a word: it is held back for the double-tap
+    /// window before it is delivered as the tap it was. Taps on controls and
+    /// anywhere else are never delayed.
+    pub text_select: bool,
+
     /// Something drawn over this screen, with the screen kept underneath.
     ///
     /// Outside the node list for the same reason the bars are: a screen cannot
@@ -2134,6 +2146,7 @@ impl Screen {
             reading_font: None,
             text_scale: None,
             hold: None,
+            text_select: false,
             overlay: None,
             accent: ScreenAccent::Plain,
         }
@@ -2152,6 +2165,16 @@ impl Screen {
     #[must_use]
     pub const fn with_hold(mut self, action: ActionId) -> Self {
         self.hold = Some(action);
+        self
+    }
+
+    /// Sends `action` when a finger is held still on the content area, and
+    /// lets a finger on a word select text with it; see
+    /// [`Screen::text_select`].
+    #[must_use]
+    pub const fn with_text_select(mut self, action: ActionId) -> Self {
+        self.hold = Some(action);
+        self.text_select = true;
         self
     }
 
@@ -2540,6 +2563,7 @@ impl Screen {
             None => PagingState::None,
         };
         layout.hold = self.hold;
+        layout.text_select = self.text_select && self.hold.is_some();
         if let Some((turns, (page, of))) = self
             .page_turns
             .filter(|_| position_band > 0)
@@ -2629,6 +2653,7 @@ impl Screen {
             // that whatever reads this can tell "covered" from "never asked".
             layout.page_turns = PagingState::SuppressedByOverlay;
             layout.hold = None;
+            layout.text_select = false;
             layout.context_actions.clear();
         }
         // Over even an overlay, though the runtime holds a card back while
@@ -6146,6 +6171,9 @@ pub struct Layout {
     pub page_turns: PagingState,
     /// Set when the screen asked to hear about a held finger.
     pub hold: Option<ActionId>,
+    /// Set when a finger on a word may select text, sent to `hold`; see
+    /// [`Screen::text_select`]. Cleared with `hold` under an overlay.
+    pub text_select: bool,
     /// Secondary actions reached by holding their owning row or tile.
     pub context_actions: Vec<(Rect, ActionId)>,
     /// Word rectangles derived during layout. These are kept outside `nodes`
