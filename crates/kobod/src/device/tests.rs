@@ -1844,3 +1844,62 @@ fn a_calibration_screen_draws_its_one_dot_where_the_tap_is_expected() {
         );
     }
 }
+
+/// Selection begins while the finger is down and the legacy hold is read on
+/// release, but they are one gesture to the reader: the same time and the
+/// same slip, or a word would select at one moment and hold at another.
+#[test]
+fn text_selection_holds_for_as_long_and_as_still_as_a_hold() {
+    assert_eq!(
+        kobo_ui::select::SELECT_HOLD_MILLIS,
+        kobo_hal::gesture::HOLD_MILLIS
+    );
+    assert_eq!(
+        u32::try_from(kobo_ui::select::SELECT_SLIP).ok(),
+        Some(kobo_hal::gesture::HOLD_SLIP_PIXELS)
+    );
+}
+
+#[test]
+fn the_selector_reads_touches_where_the_screen_was_laid_out() {
+    use kobo_hal::touch::TouchEvent;
+    use kobo_ui::select::Touch;
+    let physical = crate::device_metrics();
+    let portrait = |event| {
+        super::selector_touch(
+            event,
+            kobo_ui::Orientation::Portrait,
+            kobo_ui::LandscapeTurn::Clockwise,
+        )
+    };
+    assert_eq!(
+        portrait(TouchEvent::Down { x: 12, y: 34 }),
+        Some(Touch::Down { x: 12, y: 34 })
+    );
+    assert_eq!(
+        portrait(TouchEvent::Move { x: 12, y: 34 }),
+        Some(Touch::Move { x: 12, y: 34 })
+    );
+    assert_eq!(
+        portrait(TouchEvent::Up { x: 12, y: 34 }),
+        Some(Touch::Up { x: 12, y: 34 })
+    );
+    assert_eq!(portrait(TouchEvent::Cancel), Some(Touch::Cancel));
+    assert_eq!(portrait(TouchEvent::Up { x: u32::MAX, y: 0 }), None);
+    let (x, y) = kobo_ui::logical_point_with_turn(
+        kobo_ui::Orientation::Landscape,
+        kobo_ui::LandscapeTurn::Clockwise,
+        physical.width,
+        physical.height,
+        12,
+        34,
+    );
+    assert_eq!(
+        super::selector_touch(
+            TouchEvent::Up { x: 12, y: 34 },
+            kobo_ui::Orientation::Landscape,
+            kobo_ui::LandscapeTurn::Clockwise,
+        ),
+        Some(Touch::Up { x, y })
+    );
+}
