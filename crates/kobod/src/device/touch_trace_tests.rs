@@ -138,6 +138,7 @@ fn every_key_any_keyboard_draws_is_kept_out_of_the_log() {
         FieldKind::Secret,
         FieldKind::Number,
         FieldKind::Address,
+        FieldKind::Prose,
     ] {
         for page in pages {
             let mut keyboard = Keyboard::for_kind(kind);
@@ -153,10 +154,12 @@ fn every_key_any_keyboard_draws_is_kept_out_of_the_log() {
             }
         }
     }
-    for name in TERMINAL_KEYS
-        .into_iter()
-        .chain([kobo_ui::keyboard::CANCEL, kobod::text_entry::REVEAL])
-    {
+    for name in TERMINAL_KEYS.into_iter().chain([
+        kobo_ui::keyboard::CANCEL,
+        kobod::text_entry::REVEAL,
+        kobod::text_entry::PAGE_UP,
+        kobod::text_entry::PAGE_DOWN,
+    ]) {
         assert!(is_keyboard_key(ActionId::from_name(name)), "{name}");
     }
     for name in [JOIN, "back", "next", "previous", "settings"] {

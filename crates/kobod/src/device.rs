@@ -3329,6 +3329,8 @@ fn host_applications(
                             screen.as_ref(),
                             &chrome,
                             landscape_turn,
+                            u64::try_from(gesture_started.elapsed().as_millis())
+                                .unwrap_or(u64::MAX),
                         )?
                     } else {
                         deliver_touch(
@@ -5694,7 +5696,7 @@ const TERMINAL_KEYS: [&str; 7] = [
 /// covered, with room for rows and columns it does not have yet.
 fn is_keyboard_key(action: ActionId) -> bool {
     use kobo_ui::keyboard::{
-        key_name, AT, BACKSPACE, CANCEL, DOT, ENTER, LAYER, SHIFT, SLASH, SPACE,
+        key_name, AT, BACKSPACE, CANCEL, DOT, ENTER, LAYER, LEFT, RIGHT, SHIFT, SLASH, SPACE,
     };
     static KEYS: std::sync::OnceLock<std::collections::BTreeSet<ActionId>> =
         std::sync::OnceLock::new();
@@ -5709,7 +5711,11 @@ fn is_keyboard_key(action: ActionId) -> bool {
             AT,
             SLASH,
             DOT,
+            LEFT,
+            RIGHT,
             kobod::text_entry::REVEAL,
+            kobod::text_entry::PAGE_UP,
+            kobod::text_entry::PAGE_DOWN,
         ]
         .into_iter()
         .chain(TERMINAL_KEYS)
@@ -6189,19 +6195,53 @@ fn open_text_field(
     }
 }
 
-/// Routes one touch on a text field the runtime is holding for `app`.
+/// Routes one touch on a text field the runtime is holding for `app`, at
+/// `millis` on the gesture clock.
 ///
-/// Resolved here rather than by [`action_for_oriented`], which writes the
-/// action every tap lands on to the session log. On a keyboard that is a log
-/// of what was typed, password and all.
+/// A touch in the field's text places its caret or selects, through
+/// [`kobod::text_entry::Field::touch`]; any other is resolved against the
+/// keys when it lifts. Resolved here rather than by [`action_for_oriented`],
+/// which writes the action every tap lands on to the session log. On a
+/// keyboard that is a log of what was typed, password and all, and nothing
+/// about a touch in the text is written down either.
+///
+/// Untested on a reader: the caret and the selection are checked in
+/// `kobo_ui::edit`, in the field's own tests and in the simulator, which
+/// feeds the field the same touches in the same order.
 fn type_into(
     app: &mut Hosted,
     event: TouchEvent,
     screen: Option<&Screen>,
     chrome: &Chrome,
     landscape_turn: kobo_ui::LandscapeTurn,
+    millis: u64,
 ) -> Result<Tap, String> {
-    let (TouchEvent::Up { x, y }, Some(screen)) = (event, screen) else {
+    let Some(screen) = screen else {
+        return Ok(Tap::Handled);
+    };
+    let layout = || screen.layout_with(&metrics_for(screen).oriented(app.orientation), chrome);
+    let mut laid_out = None;
+    if let (Some(TextField::Open(_, field, _)), Some(touch)) = (
+        &mut app.typing,
+        selector_touch(event, app.orientation, landscape_turn),
+    ) {
+        // A finger sliding over the keys sends a stream of moves that mean
+        // nothing, and laying the field out for each would be the costliest
+        // thing a move did.
+        let idle = matches!(event, TouchEvent::Move { .. }) && !field.is_pressed();
+        if !idle {
+            let layout = laid_out.insert(layout());
+            match field.touch(touch, millis, layout) {
+                kobod::text_entry::Touched::Pass => {}
+                kobod::text_entry::Touched::Taken => return Ok(Tap::Handled),
+                kobod::text_entry::Touched::Redraw => {
+                    redraw_field(app);
+                    return Ok(Tap::Redraw);
+                }
+            }
+        }
+    }
+    let TouchEvent::Up { x, y } = event else {
         return Ok(Tap::Handled);
     };
     let (Ok(x), Ok(y)) = (i32::try_from(x), i32::try_from(y)) else {
@@ -6216,9 +6256,7 @@ fn type_into(
         x,
         y,
     );
-    let action = screen
-        .layout_with(&metrics_for(screen).oriented(app.orientation), chrome)
-        .hit_test(x, y);
+    let action = laid_out.unwrap_or_else(layout).hit_test(x, y);
     match app.typing.take() {
         Some(TextField::Open(request_id, mut field, drawn)) => {
             match action.and_then(|action| field.press(action)) {
