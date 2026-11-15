@@ -99,6 +99,21 @@ fn field(kind: FieldKind, [label, hint, error]: [Option<&str>; 3]) -> Node {
 }
 
 #[test]
+fn a_prose_field_round_trips_on_the_kind_byte_older_runtimes_refuse() {
+    let prose = field(FieldKind::Prose, [None, None, None]);
+    assert_eq!(round_trip(VERSION, &prose), Ok(prose.clone()));
+    let text = node_bytes(VERSION, &plain_field()).expect("encodes");
+    let bytes = node_bytes(VERSION, &prose).expect("encodes");
+    let at = text
+        .iter()
+        .zip(&bytes)
+        .position(|(a, b)| a != b)
+        .expect("the kind byte differs");
+    assert_eq!((text[at], bytes[at]), (0, 4));
+    assert_eq!(text[at + 1..], bytes[at + 1..]);
+}
+
+#[test]
 fn every_new_control_round_trips_at_protocol_16() {
     for node in new_controls() {
         assert_eq!(round_trip(CONTROLS_VERSION, &node), Ok(node.clone()));
@@ -174,6 +189,7 @@ fn a_banner_and_a_row_with_nothing_new_read_at_protocol_15_as_they_always_did() 
 fn nothing_new_on_a_field_banner_or_row_can_be_sent_at_protocol_15() {
     let refused = [
         field(FieldKind::Secret, [None, None, None]),
+        field(FieldKind::Prose, [None, None, None]),
         field(FieldKind::Text, [Some("Token"), None, None]),
         field(FieldKind::Text, [None, Some("From the account page"), None]),
         field(FieldKind::Text, [None, None, Some("Refused")]),
@@ -255,11 +271,13 @@ fn every_field_kind_has_one_byte_and_an_unknown_byte_is_refused() {
         FieldKind::Secret,
         FieldKind::Number,
         FieldKind::Address,
+        FieldKind::Prose,
     ] {
         assert_eq!(decode_field_kind(encode_field_kind(kind)), Ok(kind));
     }
+    assert_eq!(encode_field_kind(FieldKind::Prose), 4);
     assert_eq!(
-        decode_field_kind(4),
+        decode_field_kind(5),
         Err(ProtocolError::InvalidValue("field kind"))
     );
 }

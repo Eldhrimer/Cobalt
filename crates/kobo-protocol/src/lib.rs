@@ -1694,11 +1694,28 @@ pub const MAX_TEXT_SUBMIT_LEN: usize = 32;
 /// widest a character can be encoded.
 pub const MAX_TYPED_LEN: usize = 4 * kobo_ui::keyboard::MAX_TEXT;
 
-/// Whether `text` is something the keyboard could have typed into a field.
-fn valid_typed(text: &str) -> bool {
-    text.len() <= MAX_TYPED_LEN
-        && text.chars().count() <= kobo_ui::keyboard::MAX_TEXT
-        && !text.chars().any(char::is_control)
+/// The most a [`kobo_ui::FieldKind::Prose`] field may hold, in bytes: the
+/// longest string the wire carries. It holds at most
+/// [`kobo_ui::keyboard::MAX_PROSE_TEXT`] characters as well.
+pub const MAX_PROSE_TYPED_LEN: usize = kobo_ui::keyboard::MAX_PROSE_BYTES;
+
+const _: () = assert!(MAX_PROSE_TYPED_LEN <= MAX_STRING_LEN);
+
+/// Whether `text` is something the keyboard could have typed into a field of
+/// `kind`.
+fn valid_typed(text: &str, kind: kobo_ui::FieldKind) -> bool {
+    let (bytes, chars) = if kind == kobo_ui::FieldKind::Prose {
+        (MAX_PROSE_TYPED_LEN, kobo_ui::keyboard::MAX_PROSE_TEXT)
+    } else {
+        (MAX_TYPED_LEN, kobo_ui::keyboard::MAX_TEXT)
+    };
+    text.len() <= bytes && text.chars().count() <= chars && !text.chars().any(char::is_control)
+}
+
+/// Whether `text` is an answer some field could have given. The answer does
+/// not say which field it was, so it is held to the longest kind.
+fn valid_answer(text: &str) -> bool {
+    valid_typed(text, kobo_ui::FieldKind::Prose)
 }
 
 fn valid_label(text: &str, limit: usize, required: bool) -> bool {
@@ -1721,7 +1738,7 @@ fn valid_text_request(
     valid_label(prompt, MAX_TEXT_PROMPT_LEN, true)
         && valid_label(hint, MAX_TEXT_HINT_LEN, false)
         && valid_label(submit, MAX_TEXT_SUBMIT_LEN, true)
-        && valid_typed(initial)
+        && valid_typed(initial, kind)
         && secret == save_as.is_some()
         && (!secret || initial.is_empty())
         && save_as.is_none_or(|target| {
@@ -4066,7 +4083,7 @@ fn decode_text_outcome(reader: &mut Reader<'_>) -> Result<TextOutcome, ProtocolE
     Ok(match reader.u8()? {
         1 => {
             let text = reader.string()?;
-            if !valid_typed(&text) {
+            if !valid_answer(&text) {
                 return Err(ProtocolError::InvalidValue("typed text"));
             }
             TextOutcome::Typed(text)
@@ -4369,7 +4386,7 @@ fn encode_device_result(
         DeviceResult::Text(outcome) => {
             output.push(22);
             match outcome {
-                TextOutcome::Typed(text) if valid_typed(text) => {
+                TextOutcome::Typed(text) if valid_answer(text) => {
                     output.push(1);
                     push_string(output, text)?;
                 }
@@ -7337,6 +7354,11 @@ const fn decode_row_state(tag: u8, version: u8) -> Option<RowState> {
 
 /// The byte a [`FieldKind`] travels as, on a field and on any request that
 /// asks the runtime for text of that kind.
+///
+/// [`FieldKind::Prose`] came later than the others and did not move the
+/// protocol version: it is the one new byte, which a runtime that predates it
+/// refuses with the frame rather than drawing a short field the paragraph
+/// would not fit in.
 #[must_use]
 pub const fn encode_field_kind(kind: FieldKind) -> u8 {
     match kind {
@@ -7344,6 +7366,7 @@ pub const fn encode_field_kind(kind: FieldKind) -> u8 {
         FieldKind::Secret => 1,
         FieldKind::Number => 2,
         FieldKind::Address => 3,
+        FieldKind::Prose => 4,
     }
 }
 
@@ -7362,6 +7385,7 @@ pub const fn decode_field_kind(tag: u8) -> Result<FieldKind, ProtocolError> {
         1 => FieldKind::Secret,
         2 => FieldKind::Number,
         3 => FieldKind::Address,
+        4 => FieldKind::Prose,
         _ => return Err(ProtocolError::InvalidValue("field kind")),
     })
 }

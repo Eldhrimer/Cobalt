@@ -1342,7 +1342,13 @@ match self.entry.handle(action) {
 ```
 
 `TextEntry::numeric` opens on the digits and `TextEntry::address` puts `@`, `/`
-and `.` where the space bar would be. A field made with
+and `.` where the space bar would be. `TextEntry::prose` is for a paragraph or
+more of writing: it holds `MAX_PROSE_TEXT` (6000) characters rather than
+`MAX_TEXT` (512), shows as many lines as fit above the keys, and puts keys that
+move the caret either side of the space bar. Opening a field with more than it
+holds cuts the end off, so check `TextEntry::fits` first and say so instead. A
+runtime older than the prose kind refuses the request rather than drawing a
+field the text does not fit in. A field made with
 `TextEntry::saved_as(SecretTarget::named("lichess"))` is a secret: the runtime
 writes what is typed into the app's own secret namespace and answers
 `Typing::Saved`, so the app never holds the value. `CredentialSetup` does this
