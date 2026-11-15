@@ -5466,6 +5466,13 @@ fn installed_name(path: &Path) -> Result<String, String> {
 /// both the key face and a text field at the opposite end of the screen.
 const CONTROL_RELEASE_GRACE: Duration = Duration::from_millis(12);
 const KEYBOARD_RELEASE_GRACE: Duration = Duration::from_millis(30);
+/// How long a finished selection stays drawn while its application answers.
+///
+/// Longer than a control's, on purpose. A released control looks right either
+/// way, but a selection put back at once is a second refresh of the words the
+/// reader just chose, a moment before the screen that answers them replaces
+/// the page. An application that never answers still gets its words back.
+const SELECTION_RELEASE_GRACE: Duration = Duration::from_millis(600);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FeedbackKind {
@@ -5851,10 +5858,7 @@ fn apply_selection(
                 if let Some((_, older)) = release_due.take() {
                     panel.paint_feedback(display, whole_screen, surface, older)?;
                 }
-                *release_due = Some((
-                    Instant::now() + release_grace(FeedbackKind::Control),
-                    damage,
-                ));
+                *release_due = Some((Instant::now() + SELECTION_RELEASE_GRACE, damage));
             }
             if let Some((action, gesture)) = gesture {
                 kobo_protocol::write_to(
