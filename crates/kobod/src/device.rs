@@ -4333,6 +4333,7 @@ fn host_applications(
                         | Message::Welcome { .. }
                         | Message::Action { .. }
                         | Message::TextHold { .. }
+                        | Message::TextGesture { .. }
                         | Message::TaskOutcome { .. }
                         | Message::Lifecycle(_)
                         | Message::PrepareSuspend { .. }
