@@ -8,8 +8,8 @@ use std::io::{self, Read, Write};
 use kobo_ui::{
     Accent, ActionId, BannerLevel, BarAction, BarStyle, BottomAction, Caret, Cell, ControlState,
     FieldKind, FontHandle, Freeform, Glyph, NavBar, Node, NodeId, Orientation, PageTurns, Percent,
-    PictureFormat, PictureHandle, Row, RowLead, RowState, Screen, Space, TextScale, Tile,
-    TilePicture, TileShape, TileState, TopBar, TransferFailure, MAX_BAR_ACTIONS,
+    PictureFormat, PictureHandle, Row, RowLead, RowState, Screen, Space, TextGestureKind,
+    TextScale, Tile, TilePicture, TileShape, TileState, TopBar, TransferFailure, MAX_BAR_ACTIONS,
     MAX_TERMINAL_COLUMNS, MAX_TERMINAL_ROWS, MIN_NAV_DESTINATIONS,
 };
 use std::cmp::min;
@@ -70,6 +70,9 @@ pub const MAGIC: [u8; 4] = *b"KOBO";
 /// already carried; see [`ACCENT_VERSION`]. Version 16 remains readable and is
 /// written exactly as it was. Version 17 is also the quiet type and spacing,
 /// and the command role of a quoted paragraph; see [`QUIET_TYPE_VERSION`].
+///
+/// Selecting text with a finger, [`Message::TextGesture`] and a screen's hold
+/// flag value `2`, came without a version: see [`TEXT_GESTURE_TAG`].
 ///
 /// A colour picture travels the same way: a grey picture still uses the tags it
 /// always did, byte for byte, and a colour one uses tags of its own that an
@@ -213,6 +216,22 @@ pub const TIME_ZONE_VERSION: u8 = 18;
 pub const MAX_TIME_ZONE_LEN: usize = 64;
 
 pub const VERSION: u8 = 18;
+
+/// The message tag of [`Message::TextGesture`]: a word, or a run of words,
+/// chosen with a finger on a screen that asked for it with
+/// [`kobo_ui::Screen::with_text_select`].
+///
+/// Additive, as [`TIME_ZONE_VERSION`]'s tags were, so the version did not
+/// move. Deliberately far from the sequential tags in use (1 to 42), so a
+/// tree that tracks upstream can take it without colliding with whatever
+/// upstream numbers next, and upstream can renumber it on merge.
+///
+/// The screen's side is its hold flag byte: `0` is no hold and `1` a hold,
+/// exactly as before, and `2` a hold whose action also hears text gestures.
+/// A runtime that predates both refuses a frame carrying the `2` rather than
+/// misreading it, and is never sent the message, because only a screen
+/// carrying the `2` can give rise to one.
+pub const TEXT_GESTURE_TAG: u8 = 96;
 /// Version introducing server-bound account records.
 pub const SERVER_ACCOUNT_VERSION: u8 = 14;
 /// Beta wire version introducing explicit update tasks.
@@ -856,6 +875,17 @@ pub enum Message {
     /// A held word in application-defined logical text coordinates.
     TextHold {
         action: ActionId,
+        context: u64,
+        start: u32,
+        end: u32,
+    },
+    /// Text chosen with a finger on a screen that opted in with
+    /// [`kobo_ui::Screen::with_text_select`], sent to its hold action: the
+    /// gesture, and the range in application-defined logical text
+    /// coordinates. On tag [`TEXT_GESTURE_TAG`].
+    TextGesture {
+        action: ActionId,
+        kind: TextGestureKind,
         context: u64,
         start: u32,
         end: u32,
@@ -2528,6 +2558,19 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>, ProtocolError> {
             push_u32(&mut payload, *start);
             push_u32(&mut payload, *end);
         }
+        Message::TextGesture {
+            action,
+            kind,
+            context,
+            start,
+            end,
+        } => {
+            push_u32(&mut payload, action.0);
+            payload.push(kind.wire_value());
+            push_u64(&mut payload, *context);
+            push_u32(&mut payload, *start);
+            push_u32(&mut payload, *end);
+        }
         Message::Log { level, message } => {
             payload.push(*level as u8);
             push_string(&mut payload, message)?;
@@ -3142,10 +3185,10 @@ fn encoded_message_layout(message: &Message, version: u8) -> Result<(u8, usize),
         Message::SetOrientation(_) => orientation_layout(version),
         Message::Action { .. } => Ok((4, 4)),
         Message::TextHold { start, end, .. } => {
-            if start >= end {
-                return Err(ProtocolError::InvalidValue("text hold range"));
-            }
-            Ok((26, 20))
+            text_range_layout(26, 20, *start, *end, "text hold range")
+        }
+        Message::TextGesture { start, end, .. } => {
+            text_range_layout(TEXT_GESTURE_TAG, 21, *start, *end, "text gesture range")
         }
         Message::Log { message, .. } => {
             let mut length = 1;
@@ -3231,6 +3274,20 @@ fn encoded_message_layout(message: &Message, version: u8) -> Result<(u8, usize),
             Ok((41, encoded.len()))
         }
     }
+}
+
+/// A word or a run of words is never empty: `start` comes before `end`.
+fn text_range_layout(
+    tag: u8,
+    bytes: usize,
+    start: u32,
+    end: u32,
+    refusal: &'static str,
+) -> Result<(u8, usize), ProtocolError> {
+    if start >= end {
+        return Err(ProtocolError::InvalidValue(refusal));
+    }
+    Ok((tag, bytes))
 }
 
 fn suspend_layout(
@@ -5670,6 +5727,24 @@ pub fn decode(bytes: &[u8]) -> Result<Frame, ProtocolError> {
                 end,
             }
         }
+        TEXT_GESTURE_TAG => {
+            let action = ActionId(reader.u32()?);
+            let kind = TextGestureKind::from_wire(reader.u8()?)
+                .ok_or(ProtocolError::InvalidValue("text gesture kind"))?;
+            let context = reader.u64()?;
+            let start = reader.u32()?;
+            let end = reader.u32()?;
+            if start >= end {
+                return Err(ProtocolError::InvalidValue("text gesture range"));
+            }
+            Message::TextGesture {
+                action,
+                kind,
+                context,
+                start,
+                end,
+            }
+        }
         5 => Message::Log {
             level: LogLevel::try_from(reader.u8()?)?,
             message: reader.string()?,
@@ -6243,10 +6318,12 @@ fn encode_screen(
             }
         }
     }
+    // Two when the hold also hears text gestures; see [`TEXT_GESTURE_TAG`].
+    // Zero and one are written exactly as they always were.
     match screen.hold {
         None => output.push(0),
         Some(hold) => {
-            output.push(1);
+            output.push(if screen.text_select { 2 } else { 1 });
             push_u32(output, hold.0);
         }
     }
@@ -7780,9 +7857,10 @@ fn decode_screen(
             _ => return Err(ProtocolError::InvalidValue("page position flag")),
         }),
     };
-    let hold = match reader.u8()? {
-        0 => None,
-        1 => Some(ActionId(reader.u32()?)),
+    let (hold, text_select) = match reader.u8()? {
+        0 => (None, false),
+        1 => (Some(ActionId(reader.u32()?)), false),
+        2 => (Some(ActionId(reader.u32()?)), true),
         _ => return Err(ProtocolError::InvalidValue("hold flag")),
     };
     let owns_back = match reader.u8()? {
@@ -7870,6 +7948,7 @@ fn decode_screen(
     }
     screen.page_turns = page_turns;
     screen.hold = hold;
+    screen.text_select = text_select;
     screen.owns_back = owns_back;
     screen.text_scale = text_scale;
     screen.reading = reading;

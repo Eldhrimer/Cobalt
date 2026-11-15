@@ -1182,6 +1182,54 @@ fn a_held_finger_survives_the_wire() {
 }
 
 #[test]
+fn a_screen_that_selects_text_says_so_in_its_hold_flag_and_nothing_else() {
+    let encoded = |screen: Screen| {
+        encode(&Frame {
+            version: VERSION,
+            request_id: 4,
+            message: Message::SetScreen(screen),
+        })
+        .expect("encodes")
+    };
+    let holding = encoded(Screen::new(1, Vec::new()).with_hold(ActionId(21)));
+    let selecting = encoded(Screen::new(1, Vec::new()).with_text_select(ActionId(21)));
+    // The same frame, one byte apart: the flag, 1 before and 2 now.
+    assert_eq!(holding.len(), selecting.len());
+    let differing = holding
+        .iter()
+        .zip(&selecting)
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(index, (a, b))| (index, *a, *b))
+        .collect::<Vec<_>>();
+    assert_eq!(differing.len(), 1);
+    assert_eq!((differing[0].1, differing[0].2), (1, 2));
+    let Message::SetScreen(back) = decode(&selecting).expect("decodes").message else {
+        panic!("wrong message");
+    };
+    assert_eq!(back.hold, Some(ActionId(21)));
+    assert!(back.text_select);
+    let Message::SetScreen(back) = decode(&holding).expect("decodes").message else {
+        panic!("wrong message");
+    };
+    assert!(!back.text_select);
+
+    // Without a hold there is nothing to send a gesture to, and the screen is
+    // written as one that holds nothing, byte for byte.
+    let mut orphan = Screen::new(1, Vec::new());
+    orphan.text_select = true;
+    assert_eq!(encoded(orphan), encoded(Screen::new(1, Vec::new())));
+
+    // A flag past 2 is still refused.
+    let mut unknown = selecting;
+    unknown[differing[0].0] = 3;
+    assert_eq!(
+        decode(&unknown).map(|frame| frame.message),
+        Err(ProtocolError::InvalidValue("hold flag"))
+    );
+}
+
+#[test]
 fn a_screen_can_ask_for_a_text_size_and_most_do_not() {
     let screen = Screen::new(1, Vec::new());
     assert!(
