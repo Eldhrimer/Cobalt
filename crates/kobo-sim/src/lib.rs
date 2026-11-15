@@ -1180,6 +1180,18 @@ struct AppState {
     /// The same field the device draws, from the same module, so a script
     /// that types here taps the keys a reader would.
     typing: Option<(u32, kobod::text_entry::Field)>,
+    /// Text selection, the same state machine the device feeds; see
+    /// [`AppState::feed`].
+    selector: kobo_ui::TextSelector,
+    /// A quick tap on a word, held back for the double-tap window.
+    deferred_up: Option<kobo_hal::TouchEvent>,
+    /// The clock gestures are timed on: the simulator's own monotonic time
+    /// moved on by `gesture_skew`, and never before `gesture_last`. A step
+    /// that makes a whole gesture at once spends the time the gesture takes
+    /// on this clock, so the next step starts after it, however soon it
+    /// really comes.
+    gesture_skew: u64,
+    gesture_last: u64,
     /// The runtime's notices, the same module and the same rules the device
     /// uses, over the simulator's own inbox. Opened on first use, so a
     /// session that never sees one never touches the folder.
@@ -1261,6 +1273,10 @@ impl AppState {
             terminal_open: false,
             page_keys: profile_facts().page_keys,
             typing: None,
+            selector: kobo_ui::TextSelector::default(),
+            deferred_up: None,
+            gesture_skew: 0,
+            gesture_last: 0,
             notices: None,
             notice: None,
             notice_chores: NoticeChores::default(),
@@ -1493,6 +1509,192 @@ impl AppState {
             ));
         }
         value.to_json()
+    }
+
+    /// Now, on the gesture clock.
+    fn gesture_now(&self) -> io::Result<u64> {
+        let monotonic = self.time.now()?.monotonic_millis;
+        Ok(monotonic
+            .saturating_add(self.gesture_skew)
+            .max(self.gesture_last))
+    }
+
+    /// Moves the gesture clock on to `millis`, when a step made a gesture
+    /// that lasted until then.
+    fn gesture_spent(&mut self, millis: u64) -> io::Result<()> {
+        let monotonic = self.time.now()?.monotonic_millis;
+        self.gesture_last = self.gesture_last.max(millis);
+        self.gesture_skew = self.gesture_skew.max(millis.saturating_sub(monotonic));
+        Ok(())
+    }
+
+    /// The layout a finger may select text on, as the device decides it:
+    /// only on a screen that asked, with no overlay and no field open.
+    fn selectable_layout(&self) -> Option<kobo_ui::Layout> {
+        if self.typing.is_some()
+            || !self.screen.text_select
+            || self.screen.hold.is_none()
+            || self.screen.overlay.is_some()
+        {
+            return None;
+        }
+        let layout = self
+            .screen
+            .layout_with(&profile_metrics().oriented(self.orientation), &self.chrome);
+        layout.text_select.then_some(layout)
+    }
+
+    /// One touch, at `millis` on the gesture clock, through the text selector
+    /// and then, unless it took the touch, the ordinary tap and hold path.
+    /// The device does the same in the same order, so a route sends what a
+    /// reader would.
+    fn feed(
+        &mut self,
+        event: kobo_hal::TouchEvent,
+        held: bool,
+        millis: u64,
+        messages: &mut Vec<Message>,
+    ) {
+        self.expire_selection(millis, messages);
+        let physical = profile_metrics();
+        let logical = |x: u32, y: u32| {
+            let (Ok(x), Ok(y)) = (i32::try_from(x), i32::try_from(y)) else {
+                return None;
+            };
+            Some(kobo_ui::logical_point(
+                self.orientation,
+                physical.width,
+                x,
+                y,
+            ))
+        };
+        let touch = match event {
+            kobo_hal::TouchEvent::Down { x, y } => {
+                logical(x, y).map(|(x, y)| kobo_ui::select::Touch::Down { x, y })
+            }
+            kobo_hal::TouchEvent::Move { x, y } => {
+                logical(x, y).map(|(x, y)| kobo_ui::select::Touch::Move { x, y })
+            }
+            kobo_hal::TouchEvent::Up { x, y } => {
+                logical(x, y).map(|(x, y)| kobo_ui::select::Touch::Up { x, y })
+            }
+            kobo_hal::TouchEvent::Cancel => Some(kobo_ui::select::Touch::Cancel),
+        };
+        let Some(touch) = touch else {
+            messages.extend(self.input_event(event, held));
+            return;
+        };
+        let mut selector = std::mem::take(&mut self.selector);
+        let outcome = selector.touch(touch, millis, &mut || self.selectable_layout());
+        self.selector = selector;
+        if outcome.replay {
+            if let Some(up) = self.deferred_up.take() {
+                messages.extend(self.input_event(up, false));
+            }
+        }
+        match outcome.step {
+            kobo_ui::select::Step::Pass => messages.extend(self.input_event(event, held)),
+            kobo_ui::select::Step::Quiet | kobo_ui::select::Step::Paint { .. } => {}
+            kobo_ui::select::Step::Defer => self.deferred_up = Some(event),
+            kobo_ui::select::Step::Done { gesture, .. } => {
+                if let Some((action, gesture)) = gesture {
+                    messages.push(Message::TextGesture {
+                        action,
+                        kind: gesture.kind,
+                        context: gesture.hit.context,
+                        start: gesture.hit.start,
+                        end: gesture.hit.end,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Lets the selector's time pass up to `millis`: a selection whose hold
+    /// time is up begins, and a held-back tap whose window closed is
+    /// delivered.
+    fn expire_selection(&mut self, millis: u64, messages: &mut Vec<Message>) {
+        let Some(deadline) = self.selector.deadline().filter(|due| millis >= *due) else {
+            return;
+        };
+        let mut selector = std::mem::take(&mut self.selector);
+        let outcome = selector.expire(deadline.max(millis), &mut || self.selectable_layout());
+        self.selector = selector;
+        if outcome.replay {
+            if let Some(up) = self.deferred_up.take() {
+                messages.extend(self.input_event(up, false));
+            }
+        }
+    }
+
+    /// Ends a step: a tap held back for a double tap that the step did not
+    /// make is delivered now, as the tap it was, and the gesture clock moves
+    /// past the window so the next step cannot finish it. Existing routes
+    /// that tap words behave as they did before selection existed.
+    fn settle_gestures(&mut self, ended: u64, messages: &mut Vec<Message>) -> io::Result<()> {
+        let mut ended = ended;
+        if self.selector.has_deferred() {
+            if let Some(deadline) = self.selector.deadline() {
+                self.expire_selection(deadline, messages);
+                ended = ended.max(deadline);
+            }
+        }
+        self.gesture_spent(ended)
+    }
+
+    /// The touches a gesture step makes, each with the time it happened on
+    /// the gesture clock from `millis`: a tap is instantaneous, a hold lifts
+    /// after the hold time. `None` for a step that is not a touch.
+    fn touch_step(
+        &mut self,
+        kind: &str,
+        source: &str,
+        millis: u64,
+    ) -> io::Result<Option<Vec<(kobo_hal::TouchEvent, bool, u64)>>> {
+        Ok(match kind {
+            "touch" => Some(at(self.input.touch(source, &POSE, millis)?, millis)),
+            "fixture-tap" => {
+                if !source.is_empty() {
+                    return Err(io::Error::other("fixture-tap takes no arguments"));
+                }
+                Some(at(self.input.fixture_tap(&POSE, millis)?, millis))
+            }
+            "tap" => {
+                let (x, y) = touch_point(kind, source)?;
+                Some(at(self.input.tap(x, y, &POSE, millis)?, millis))
+            }
+            "hold" => {
+                let (x, y) = touch_point(kind, source)?;
+                let lift = millis.saturating_add(kobo_hal::gesture::HOLD_MILLIS);
+                Some(
+                    self.input
+                        .hold(x, y, &POSE, millis)?
+                        .into_iter()
+                        .map(|(event, held)| {
+                            let when = if matches!(event, kobo_hal::TouchEvent::Up { .. }) {
+                                lift
+                            } else {
+                                millis
+                            };
+                            (event, held, when)
+                        })
+                        .collect(),
+                )
+            }
+            "drag" => {
+                let (from, to) = drag_points(source)?;
+                Some(self.input.drag(from, to, &POSE, millis)?)
+            }
+            "double-tap" => {
+                let (x, y) = touch_point(kind, source)?;
+                Some(self.input.double_tap(x, y, &POSE, millis)?)
+            }
+            "double-hold" => {
+                let (x, y) = touch_point(kind, source)?;
+                Some(self.input.double_hold(x, y, &POSE, millis)?)
+            }
+            _ => None,
+        })
     }
 
     fn input_event(&mut self, event: kobo_hal::TouchEvent, held: bool) -> Option<Message> {
@@ -1999,46 +2201,20 @@ impl AppSession {
                     "panel must be ready before replaying input",
                 ));
             }
-            let millis = state.time.now()?.monotonic_millis;
+            let millis = state.gesture_now()?;
             let mut messages = Vec::new();
+            let timed = state.touch_step(kind, source, millis)?;
+            if let Some(events) = timed {
+                let mut ended = millis;
+                for (event, held, when) in events {
+                    state.feed(event, held, when, &mut messages);
+                    ended = ended.max(when);
+                }
+                state.settle_gestures(ended, &mut messages)?;
+            }
             match kind {
-                "touch" => {
-                    let events = state.input.touch(source, &POSE, millis)?;
-                    for (event, held) in events {
-                        if let Some(message) = state.input_event(event, held) {
-                            messages.push(message);
-                        }
-                    }
-                }
-                "fixture-tap" => {
-                    if !source.is_empty() {
-                        return Err(io::Error::other("fixture-tap takes no arguments"));
-                    }
-                    let events = state.input.fixture_tap(&POSE, millis)?;
-                    for (event, held) in events {
-                        if let Some(message) = state.input_event(event, held) {
-                            messages.push(message);
-                        }
-                    }
-                }
-                "tap" | "hold" => {
-                    let (x, y) = parse_touch(source.as_bytes())
-                        .ok_or_else(|| io::Error::other(format!("invalid {kind} coordinates")))?;
-                    let (x, y) = (
-                        u32::try_from(x).map_err(io::Error::other)?,
-                        u32::try_from(y).map_err(io::Error::other)?,
-                    );
-                    let events = if kind == "hold" {
-                        state.input.hold(x, y, &POSE, millis)?
-                    } else {
-                        state.input.tap(x, y, &POSE, millis)?
-                    };
-                    for (event, held) in events {
-                        if let Some(message) = state.input_event(event, held) {
-                            messages.push(message);
-                        }
-                    }
-                }
+                "touch" | "fixture-tap" | "tap" | "hold" | "drag" | "double-tap"
+                | "double-hold" => {}
                 "gpio" | "page" => {
                     if let Some(forward) = page_turn(&mut state.input, kind, source)? {
                         state.note_page_press();
@@ -2062,7 +2238,7 @@ impl AppSession {
                 "resync" => state.input.resynchronize(source)?,
                 _ => {
                     return Err(io::Error::other(
-                        "input expects touch, gpio, page or resync",
+                        "input expects touch, tap, hold, drag, double-tap, double-hold, gpio, page or resync",
                     ))
                 }
             }
@@ -2797,6 +2973,26 @@ impl AppSession {
                 let response = std::str::from_utf8(&request.body)
                     .map_err(io::Error::other)
                     .and_then(|source| self.replay_input(&format!("hold {source}")));
+                match response {
+                    Ok(()) => write_response(&mut stream, 204, "text/plain; charset=utf-8", b""),
+                    Err(error) => {
+                        write_response(&mut stream, 400, "text/plain", error.to_string().as_bytes())
+                    }
+                }
+            }
+            ("POST", route @ ("/drag" | "/double-tap" | "/double-hold")) => {
+                if !self
+                    .state
+                    .lock()
+                    .map_err(|_| io::Error::other("app state lock poisoned"))?
+                    .panel
+                    .accepts_input()
+                {
+                    return write_response(&mut stream, 409, "text/plain", b"Panel is busy or its contents are uncertain. Complete the update or retry the failed refresh before touching.");
+                }
+                let response = std::str::from_utf8(&request.body)
+                    .map_err(io::Error::other)
+                    .and_then(|source| self.replay_input(&format!("{} {source}", &route[1..])));
                 match response {
                     Ok(()) => write_response(&mut stream, 204, "text/plain; charset=utf-8", b""),
                     Err(error) => {
@@ -4674,6 +4870,49 @@ fn parse_request(bytes: &[u8]) -> Result<HttpRequest, &'static str> {
     })
 }
 
+/// The pixel a `tap` or `hold` command names.
+/// Gives each event of a step the one time it happened at.
+fn at(
+    events: Vec<(kobo_hal::TouchEvent, bool)>,
+    millis: u64,
+) -> Vec<(kobo_hal::TouchEvent, bool, u64)> {
+    events
+        .into_iter()
+        .map(|(event, held)| (event, held, millis))
+        .collect()
+}
+
+/// The two points of a drag: `x1=…&y1=…&x2=…&y2=…`.
+fn drag_points(source: &str) -> io::Result<((u32, u32), (u32, u32))> {
+    let mut values = [None; 4];
+    for part in source.split('&') {
+        let (key, value) = part
+            .split_once('=')
+            .ok_or_else(|| io::Error::other("drag takes x1=…&y1=…&x2=…&y2=…"))?;
+        let slot = match key {
+            "x1" => 0,
+            "y1" => 1,
+            "x2" => 2,
+            "y2" => 3,
+            _ => return Err(io::Error::other("drag takes x1=…&y1=…&x2=…&y2=…")),
+        };
+        values[slot] = value.parse::<u32>().ok();
+    }
+    match values {
+        [Some(x1), Some(y1), Some(x2), Some(y2)] => Ok(((x1, y1), (x2, y2))),
+        _ => Err(io::Error::other("invalid drag coordinates")),
+    }
+}
+
+fn touch_point(kind: &str, source: &str) -> io::Result<(u32, u32)> {
+    let (x, y) = parse_touch(source.as_bytes())
+        .ok_or_else(|| io::Error::other(format!("invalid {kind} coordinates")))?;
+    Ok((
+        u32::try_from(x).map_err(io::Error::other)?,
+        u32::try_from(y).map_err(io::Error::other)?,
+    ))
+}
+
 fn parse_touch(body: &[u8]) -> Option<(i32, i32)> {
     let body = std::str::from_utf8(body).ok()?;
     let mut x = None;
@@ -6298,6 +6537,162 @@ mod tests {
         session.state.lock().unwrap().lifecycle = Lifecycle::Background;
         session.replay_input("gpio 1 194 1").unwrap();
         assert!(read_protocol_frame(&mut client).is_err());
+    }
+
+    #[test]
+    fn route_gestures_on_words_send_what_a_reader_would() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let mut state = AppState::default();
+        state.set_screen(
+            kobo_sdk::ScreenBuilder::new("page")
+                .selectable_rich_text_linking(
+                    "Call me Ishmael. Some years ago, never mind how long precisely.",
+                    Vec::new(),
+                    kobo_ui::ParagraphPresentation::default(),
+                    7,
+                    100,
+                    Vec::<(&str, usize, usize)>::new(),
+                )
+                .page_turns("back", "on")
+                .select_text("mark")
+                .build(),
+        );
+        let hits = state
+            .screen
+            .layout_with(
+                &profile_metrics().oriented(state.orientation),
+                &state.chrome,
+            )
+            .text_hits;
+        let centre = |index: usize| {
+            let (rect, hit) = hits[index];
+            (rect.x + rect.width / 2, rect.y + rect.height / 2, hit)
+        };
+        let (x0, y0, first) = centre(0);
+        let (x2, y2, third) = centre(2);
+        let session = AppSession {
+            state: Arc::new(Mutex::new(state)),
+            writer: AppWriter::spawn_for(server, kobo_protocol::VERSION),
+        };
+        let mark = ActionId::from_name("mark");
+        let gesture = |kind, start, end| Message::TextGesture {
+            action: mark,
+            kind,
+            context: 7,
+            start,
+            end,
+        };
+
+        // A tap on a word is held back for a double tap that never comes,
+        // and delivered as the page turn it was by the end of the step.
+        session.replay_input(&format!("tap x={x0}&y={y0}")).unwrap();
+        assert_eq!(
+            read_protocol_frame(&mut client).unwrap().message,
+            Message::Action {
+                action: ActionId::from_name("back")
+            }
+        );
+        // The next tap, straight after, is a tap of its own and not the
+        // second half of a double tap.
+        session.replay_input(&format!("tap x={x0}&y={y0}")).unwrap();
+        assert_eq!(
+            read_protocol_frame(&mut client).unwrap().message,
+            Message::Action {
+                action: ActionId::from_name("back")
+            }
+        );
+
+        session
+            .replay_input(&format!("hold x={x0}&y={y0}"))
+            .unwrap();
+        assert_eq!(
+            read_protocol_frame(&mut client).unwrap().message,
+            gesture(kobo_ui::TextGestureKind::Select, first.start, first.end)
+        );
+
+        session
+            .replay_input(&format!("drag x1={x2}&y1={y2}&x2={x0}&y2={y0}"))
+            .unwrap();
+        assert_eq!(
+            read_protocol_frame(&mut client).unwrap().message,
+            gesture(kobo_ui::TextGestureKind::Select, first.start, third.end)
+        );
+
+        session
+            .replay_input(&format!("double-tap x={x2}&y={y2}"))
+            .unwrap();
+        assert_eq!(
+            read_protocol_frame(&mut client).unwrap().message,
+            gesture(kobo_ui::TextGestureKind::DoubleTap, third.start, third.end)
+        );
+
+        session
+            .replay_input(&format!("double-hold x={x2}&y={y2}"))
+            .unwrap();
+        assert_eq!(
+            read_protocol_frame(&mut client).unwrap().message,
+            gesture(
+                kobo_ui::TextGestureKind::DoubleTapHold,
+                third.start,
+                third.end
+            )
+        );
+        assert!(read_protocol_frame(&mut client).is_err(), "nothing else");
+        assert!(session.replay_input("drag x1=1&y1=2").is_err());
+    }
+
+    #[test]
+    fn a_screen_that_does_not_select_text_still_hears_a_held_word() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let mut state = AppState::default();
+        state.set_screen(
+            kobo_sdk::ScreenBuilder::new("page")
+                .selectable_rich_text_linking(
+                    "Call me Ishmael.",
+                    Vec::new(),
+                    kobo_ui::ParagraphPresentation::default(),
+                    7,
+                    0,
+                    Vec::<(&str, usize, usize)>::new(),
+                )
+                .hold("mark")
+                .build(),
+        );
+        let (rect, hit) = state
+            .screen
+            .layout_with(
+                &profile_metrics().oriented(state.orientation),
+                &state.chrome,
+            )
+            .text_hits[0];
+        let (x, y) = (rect.x + rect.width / 2, rect.y + rect.height / 2);
+        let session = AppSession {
+            state: Arc::new(Mutex::new(state)),
+            writer: AppWriter::spawn_for(server, kobo_protocol::VERSION),
+        };
+        session.replay_input(&format!("hold x={x}&y={y}")).unwrap();
+        assert_eq!(
+            read_protocol_frame(&mut client).unwrap().message,
+            Message::TextHold {
+                action: ActionId::from_name("mark"),
+                context: 7,
+                start: hit.start,
+                end: hit.end,
+            }
+        );
+        session
+            .replay_input(&format!("double-tap x={x}&y={y}"))
+            .unwrap();
+        assert!(
+            read_protocol_frame(&mut client).is_err(),
+            "two taps on a page with no controls are two taps on nothing"
+        );
     }
 
     #[test]

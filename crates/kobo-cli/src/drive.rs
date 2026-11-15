@@ -229,6 +229,13 @@ impl Driver {
             "tap-paged" => self.tap_paged(rest),
             "tap-at" => parse_point(rest).and_then(|(x, y)| self.touch(x, y)),
             "hold-at" => parse_point(rest).and_then(|(x, y)| self.hold(x, y)),
+            "drag-at" => parse_drag(rest).and_then(|((x1, y1), (x2, y2))| {
+                self.press("/drag", &format!("x1={x1}&y1={y1}&x2={x2}&y2={y2}"))
+            }),
+            "double-tap-at" => parse_point(rest)
+                .and_then(|(x, y)| self.press("/double-tap", &format!("x={x}&y={y}"))),
+            "double-hold-at" => parse_point(rest)
+                .and_then(|(x, y)| self.press("/double-hold", &format!("x={x}&y={y}"))),
             "type" => self.type_text(rest),
             "shot" => self.shot(rest).map(|path| {
                 println!("shot {}", path.display());
@@ -291,6 +298,9 @@ impl Driver {
                 | "tap-paged"
                 | "tap-at"
                 | "hold-at"
+                | "drag-at"
+                | "double-tap-at"
+                | "double-hold-at"
                 | "type"
                 | "wait-for"
                 | "wait-for-id"
@@ -796,18 +806,19 @@ impl Driver {
     /// work is not awaited here, so the next step can cancel it. Simulators
     /// without callback markers retain the bounded legacy paint wait.
     fn touch(&self, x: i32, y: i32) -> Result<(), String> {
-        self.press("/touch", x, y)
+        self.press("/touch", &format!("x={x}&y={y}"))
     }
 
     /// The same, held still long enough to be a hold rather than a tap: what a
     /// reader does to select a word.
     fn hold(&self, x: i32, y: i32) -> Result<(), String> {
-        self.press("/hold", x, y)
+        self.press("/hold", &format!("x={x}&y={y}"))
     }
 
-    fn press(&self, route: &str, x: i32, y: i32) -> Result<(), String> {
+    /// Posts one gesture, `body` being its points, and waits as for a tap.
+    fn press(&self, route: &str, body: &str) -> Result<(), String> {
         let before = self.paints()?;
-        self.post(route, &format!("x={x}&y={y}"))?;
+        self.post(route, body)?;
         let deadline = Instant::now() + APPEAR_TIMEOUT;
         loop {
             let bytes = match self.get("/activity") {
@@ -1629,6 +1640,18 @@ fn parse_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
+/// A point on the panel.
+type Point = (i32, i32);
+
+/// The two points of `drag-at X1,Y1 X2,Y2`.
+fn parse_drag(text: &str) -> Result<(Point, Point), String> {
+    let mut points = text.split_whitespace();
+    let (Some(from), Some(to), None) = (points.next(), points.next(), points.next()) else {
+        return Err("drag-at takes 'x1,y1 x2,y2'".to_owned());
+    };
+    Ok((parse_point(from)?, parse_point(to)?))
+}
+
 fn parse_point(text: &str) -> Result<(i32, i32), String> {
     let (x, y) = text
         .split_once([',', ' '])
@@ -1815,6 +1838,17 @@ mod tests {
         assert!(super::parse_atomic_capture(&bytes[..bytes.len() - 1]).is_err());
         *bytes.last_mut().unwrap() ^= 1;
         assert!(super::parse_atomic_capture(&bytes).is_err());
+    }
+
+    #[test]
+    fn a_drag_names_two_points_and_nothing_else() {
+        assert_eq!(
+            super::parse_drag("120,300 480,340"),
+            Ok(((120, 300), (480, 340)))
+        );
+        assert!(super::parse_drag("120,300").is_err());
+        assert!(super::parse_drag("120,300 480,340 1,2").is_err());
+        assert!(super::parse_drag("120,300 a,b").is_err());
     }
 
     #[test]

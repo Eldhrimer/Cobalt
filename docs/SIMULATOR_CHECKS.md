@@ -103,6 +103,31 @@ Beyond taps and typing, a route can do what an owner does around the app:
 - `page next` and `page back` press the reader's page keys.
 - `type` turns to the keyboard page a character is on by itself.
 
+## Selecting text
+
+A screen built with `select_text` (see SDK.md, Selecting text) answers three
+gestures on its words, and a route makes each of them through the same
+selector the reader runs, on the simulator's own gesture clock:
+
+| step | HTTP | what it does |
+| --- | --- | --- |
+| `hold-at X,Y` | `POST /hold` `x=X&y=Y` | lands, stays still for the hold time and lifts: one word, as `Select` |
+| `drag-at X1,Y1 X2,Y2` | `POST /drag` `x1=X1&y1=Y1&x2=X2&y2=Y2` | lands, waits the hold time, slides to the second point and lifts there: the range, as `Select` |
+| `double-tap-at X,Y` | `POST /double-tap` `x=X&y=Y` | two quick taps: the word, as `DoubleTap` |
+| `double-hold-at X,Y` | `POST /double-hold` `x=X&y=Y` | a quick tap, then a second contact held: the word, as `DoubleTapHold` |
+
+The layout JSON's `textHits` gives each word's rectangle. On such a screen a
+quick tap on a word is held back for the double-tap window, as on a reader.
+In a route it is still delivered by the end of its own `tap` or `tap-at` step,
+as the tap it was, and the gesture clock moves past the window, so the next
+step's tap is a tap of its own: routes written before selection behave as
+they did. On a screen that did not ask for selection every step does exactly
+what it did before, and `hold-at` on a word still sends the held word.
+
+The browser shell selects too: press on a word, keep the button down for half
+a second, and let go where the selection should end. Nothing is drawn while
+the button is down.
+
 ## Extra routes
 
 An app's `drive.kobo` runs from the seeded state above. Any

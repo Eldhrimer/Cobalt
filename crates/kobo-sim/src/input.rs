@@ -149,6 +149,108 @@ impl Replay {
         )?);
         Ok(events)
     }
+    /// A finger that lands, stays still for the hold time, slides to a second
+    /// point and lifts there: what a reader does to select a run of words.
+    ///
+    /// Each event comes with the time it happened, from `millis` on. The
+    /// slide is reported as a few moves along the way, as a panel reports
+    /// one, so a selection grows under it word by word.
+    pub fn drag(
+        &mut self,
+        from: (u32, u32),
+        to: (u32, u32),
+        pose: &PanelPose<'_>,
+        millis: u64,
+    ) -> io::Result<Vec<(TouchEvent, bool, u64)>> {
+        let (x1, y1) = self.touch_point(from, pose, "dragging")?;
+        let (x2, y2) = pose
+            .display_to_touch(to.0, to.1)
+            .ok_or_else(|| io::Error::other("touch is outside the selected profile"))?;
+        let mut next = self.clone();
+        let mut events = timed(
+            next.touch(
+                &format!("3 47 0;3 57 1;3 53 {x1};3 54 {y1};0 0 0"),
+                pose,
+                millis,
+            )?,
+            millis,
+        );
+        let held = millis.saturating_add(kobo_hal::gesture::HOLD_MILLIS);
+        let mut at = held;
+        for step in 1..=DRAG_STEPS {
+            let along = |from: i32, to: i32| {
+                let from = i64::from(from);
+                let to = i64::from(to);
+                from + (to - from) * i64::from(step) / i64::from(DRAG_STEPS)
+            };
+            at = held.saturating_add(u64::from(step) * DRAG_STEP_MILLIS);
+            events.extend(timed(
+                next.touch(
+                    &format!("3 53 {};3 54 {};0 0 0", along(x1, x2), along(y1, y2)),
+                    pose,
+                    at,
+                )?,
+                at,
+            ));
+        }
+        events.extend(timed(next.touch("3 57 -1;0 0 0", pose, at)?, at));
+        *self = next;
+        Ok(events)
+    }
+    /// Two quick taps on one point, close enough together to be a double tap.
+    pub fn double_tap(
+        &mut self,
+        x: u32,
+        y: u32,
+        pose: &PanelPose<'_>,
+        millis: u64,
+    ) -> io::Result<Vec<(TouchEvent, bool, u64)>> {
+        let (x, y) = self.touch_point((x, y), pose, "tapping")?;
+        let mut next = self.clone();
+        let tap = format!("3 47 0;3 57 1;3 53 {x};3 54 {y};0 0 0;3 57 -1;0 0 0");
+        let second = millis.saturating_add(DOUBLE_TAP_GAP_MILLIS);
+        let mut events = timed(next.touch(&tap, pose, millis)?, millis);
+        events.extend(timed(next.touch(&tap, pose, second)?, second));
+        *self = next;
+        Ok(events)
+    }
+    /// A quick tap, then a second contact on the same point held still for
+    /// the hold time.
+    pub fn double_hold(
+        &mut self,
+        x: u32,
+        y: u32,
+        pose: &PanelPose<'_>,
+        millis: u64,
+    ) -> io::Result<Vec<(TouchEvent, bool, u64)>> {
+        let (x, y) = self.touch_point((x, y), pose, "tapping")?;
+        let mut next = self.clone();
+        let land = format!("3 47 0;3 57 1;3 53 {x};3 54 {y};0 0 0");
+        let second = millis.saturating_add(DOUBLE_TAP_GAP_MILLIS);
+        let lift = second.saturating_add(kobo_hal::gesture::HOLD_MILLIS);
+        let mut events = timed(
+            next.touch(&format!("{land};3 57 -1;0 0 0"), pose, millis)?,
+            millis,
+        );
+        events.extend(timed(next.touch(&land, pose, second)?, second));
+        events.extend(timed(next.touch("3 57 -1;0 0 0", pose, lift)?, lift));
+        *self = next;
+        Ok(events)
+    }
+    fn touch_point(
+        &self,
+        (x, y): (u32, u32),
+        pose: &PanelPose<'_>,
+        doing: &str,
+    ) -> io::Result<(i32, i32)> {
+        if !self.decoder.is_quiescent() {
+            return Err(io::Error::other(format!(
+                "finish or resynchronize the active raw gesture before {doing}"
+            )));
+        }
+        pose.display_to_touch(x, y)
+            .ok_or_else(|| io::Error::other("touch is outside the selected profile"))
+    }
     /// Independently authored fixture coordinate, not a device event capture.
     pub fn fixture_tap(
         &mut self,
@@ -180,6 +282,20 @@ impl Replay {
             .build()
     }
 }
+/// How many moves a synthetic drag is reported as, and how far apart.
+const DRAG_STEPS: u32 = 8;
+const DRAG_STEP_MILLIS: u64 = 20;
+/// How long after the first tap of a synthetic double tap the second lands:
+/// well inside the double-tap window.
+const DOUBLE_TAP_GAP_MILLIS: u64 = 120;
+
+fn timed(events: Vec<(TouchEvent, bool)>, millis: u64) -> Vec<(TouchEvent, bool, u64)> {
+    events
+        .into_iter()
+        .map(|(event, held)| (event, held, millis))
+        .collect()
+}
+
 fn parse(source: &str) -> io::Result<Vec<InputEvent32>> {
     if source.len() > 4096 {
         return Err(io::Error::other("input step exceeds 4096 bytes"));
@@ -284,6 +400,48 @@ mod tests {
             tap.as_slice(),
             [_, (TouchEvent::Up { .. }, false)]
         ));
+    }
+    #[test]
+    fn synthetic_selection_gestures_land_move_and_lift_on_time() {
+        let pose = &super::super::POSE;
+        let mut replay = Replay::new(pose);
+        let drag = replay.drag((100, 200), (300, 260), pose, 1000).unwrap();
+        assert!(matches!(
+            drag.first(),
+            Some((TouchEvent::Down { x: 100, y: 200 }, false, 1000))
+        ));
+        let moves = drag
+            .iter()
+            .filter(|(event, _, _)| matches!(event, TouchEvent::Move { .. }))
+            .collect::<Vec<_>>();
+        assert!(!moves.is_empty());
+        assert!(moves
+            .iter()
+            .all(|(_, _, at)| *at > 1000 + kobo_hal::gesture::HOLD_MILLIS));
+        assert!(matches!(
+            drag.last(),
+            Some((TouchEvent::Up { x: 300, y: 260 }, _, _))
+        ));
+        assert!(replay.is_quiescent());
+
+        let double = replay.double_tap(100, 200, pose, 5000).unwrap();
+        let ups = double
+            .iter()
+            .filter(|(event, _, _)| matches!(event, TouchEvent::Up { .. }))
+            .map(|(_, held, at)| (*held, *at))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ups,
+            vec![(false, 5000), (false, 5000 + DOUBLE_TAP_GAP_MILLIS)]
+        );
+
+        let held = replay.double_hold(100, 200, pose, 9000).unwrap();
+        assert!(matches!(
+            held.last(),
+            Some((TouchEvent::Up { .. }, true, at))
+                if *at == 9000 + DOUBLE_TAP_GAP_MILLIS + kobo_hal::gesture::HOLD_MILLIS
+        ));
+        assert!(replay.is_quiescent());
     }
     #[test]
     fn page_keys_use_hal_edges_and_portrait_mapping_and_bad_records_do_not_mutate() {

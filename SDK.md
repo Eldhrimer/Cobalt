@@ -296,6 +296,9 @@ margins and blank space are never delayed, and a screen that does not ask for
 `select_text` behaves exactly as before.
 
 `AppRunner::text_gesture(action, gesture)` drives the callback from a test.
+In the simulator, the `hold-at`, `drag-at`, `double-tap-at` and
+`double-hold-at` route steps make the gestures; see the route step table
+below and docs/SIMULATOR_CHECKS.md.
 
 ---
 
@@ -1945,6 +1948,9 @@ A script is one step per line; `#` is a comment.
 | `tap-id ACTION` | taps the control raising `ACTION`, by stable action name or numeric ID |
 | `tap-at X,Y` | taps a point, for a control with no words |
 | `hold-at X,Y` | holds a point for the hold time, for an app that selects words (the layout JSON's `textHits` gives each word's rectangle) |
+| `drag-at X1,Y1 X2,Y2` | holds the first point for the hold time, slides to the second and lifts: a selection, on a `select_text` screen |
+| `double-tap-at X,Y` | two quick taps on a point, on a `select_text` screen |
+| `double-hold-at X,Y` | a quick tap, then a second contact held on the same point, on a `select_text` screen |
 | `type TEXT` | taps the on-screen key for each character in turn |
 | `expect TEXT` | fails unless something on the screen says it |
 | `expect-missing TEXT` | fails if something does |
