@@ -46,6 +46,7 @@ fn a_text_request_and_every_answer_to_it_round_trip_at_protocol_sixteen() {
         FieldKind::Secret,
         FieldKind::Number,
         FieldKind::Address,
+        FieldKind::Prose,
     ] {
         let request = frame(TEXT_ENTRY_VERSION, Message::DeviceRequest(ask(kind)));
         let bytes = encode(&request).unwrap();
@@ -245,4 +246,83 @@ fn a_typed_secret_is_stored_through_the_same_request_a_handed_over_one_is() {
     ));
     // A secret is never written into a log line by accident.
     assert!(!format!("{:?}", basic.install("open sesame")).contains("sesame"));
+}
+
+fn long(kind: FieldKind, initial: String) -> DeviceRequest {
+    DeviceRequest::TypeText {
+        prompt: "Retype".into(),
+        hint: String::new(),
+        initial,
+        submit: "Done".into(),
+        kind,
+        save_as: None,
+    }
+}
+
+#[test]
+fn a_prose_field_holds_a_paragraph_and_a_short_one_still_does_not() {
+    use kobo_ui::keyboard::{MAX_PROSE_TEXT, MAX_TEXT};
+    let paragraph = "word ".repeat(MAX_PROSE_TEXT / 5);
+    assert_eq!(paragraph.chars().count(), MAX_PROSE_TEXT);
+    let asked = frame(
+        VERSION,
+        Message::DeviceRequest(long(FieldKind::Prose, paragraph.clone())),
+    );
+    assert_eq!(decode(&encode(&asked).unwrap()).unwrap(), asked);
+    let answered = frame(
+        VERSION,
+        Message::DeviceResult(DeviceResult::Text(TextOutcome::Typed(paragraph.clone()))),
+    );
+    assert_eq!(decode(&encode(&answered).unwrap()).unwrap(), answered);
+    // Accented text takes more bytes than characters, and fits as well.
+    let accented = "é".repeat(MAX_PROSE_TEXT);
+    assert!(encode(&frame(
+        VERSION,
+        Message::DeviceRequest(long(FieldKind::Prose, accented))
+    ))
+    .is_ok());
+    for refused in [
+        long(FieldKind::Prose, format!("{paragraph}x")),
+        long(FieldKind::Prose, "€".repeat(MAX_PROSE_TYPED_LEN / 3 + 1)),
+        long(FieldKind::Prose, "one\ntwo".into()),
+        long(FieldKind::Text, "x".repeat(MAX_TEXT + 1)),
+        long(FieldKind::Address, paragraph.clone()),
+    ] {
+        assert!(
+            encode(&frame(VERSION, Message::DeviceRequest(refused.clone()))).is_err(),
+            "{refused:?}"
+        );
+    }
+    assert!(encode(&frame(
+        VERSION,
+        Message::DeviceResult(DeviceResult::Text(TextOutcome::Typed(format!(
+            "{paragraph}x"
+        ))))
+    ))
+    .is_err());
+}
+
+#[test]
+fn a_prose_request_differs_from_a_text_one_in_its_kind_byte_alone() {
+    // Every frame an existing application writes is the bytes it was, and
+    // the new kind is a byte the runtimes before it refuse.
+    let text = encode(&frame(
+        VERSION,
+        Message::DeviceRequest(long(FieldKind::Text, "café".into())),
+    ))
+    .unwrap();
+    let prose = encode(&frame(
+        VERSION,
+        Message::DeviceRequest(long(FieldKind::Prose, "café".into())),
+    ))
+    .unwrap();
+    assert_eq!(text.len(), prose.len());
+    let differing: Vec<_> = text
+        .iter()
+        .zip(&prose)
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(at, (a, b))| (at, *a, *b))
+        .collect();
+    assert_eq!(differing, [(text.len() - 2, 0, 4)]);
 }
