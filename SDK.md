@@ -1348,7 +1348,16 @@ more of writing: it holds `MAX_PROSE_TEXT` (6000) characters rather than
 move the caret either side of the space bar. Opening a field with more than it
 holds cuts the end off, so check `TextEntry::fits` first and say so instead. A
 runtime older than the prose kind refuses the request rather than drawing a
-field the text does not fit in. A field made with
+field the text does not fit in.
+
+Every field but a secret has a caret, drawn as a bar. A tap in the text puts
+it at the nearest character boundary, a press dragged across the text selects
+from where it landed while the finger is down, and a double tap selects a
+word. Typing replaces a selection and backspace deletes it; a tap on nothing
+drops it. An entry longer than the room above the keys is drawn as a window
+of lines that follows the caret, with `Earlier` and `Later` under it to page.
+The app sees none of this: it hears the finished text, as before. A field made
+with
 `TextEntry::saved_as(SecretTarget::named("lichess"))` is a secret: the runtime
 writes what is typed into the app's own secret namespace and answers
 `Typing::Saved`, so the app never holds the value. `CredentialSetup` does this
@@ -1952,10 +1961,10 @@ A script is one step per line; `#` is a comment.
 | --- | --- |
 | `tap LABEL` | finds the node whose text carries `LABEL` and taps its centre |
 | `tap-id ACTION` | taps the control raising `ACTION`, by stable action name or numeric ID |
-| `tap-at X,Y` | taps a point, for a control with no words |
+| `tap-at X,Y` | taps a point, for a control with no words, or to put the caret there in an open text field |
 | `hold-at X,Y` | holds a point for the hold time, for an app that selects words (the layout JSON's `textHits` gives each word's rectangle) |
-| `drag-at X1,Y1 X2,Y2` | holds the first point for the hold time, slides to the second and lifts: a selection, on a `select_text` screen |
-| `double-tap-at X,Y` | two quick taps on a point, on a `select_text` screen |
+| `drag-at X1,Y1 X2,Y2` | holds the first point for the hold time, slides to the second and lifts: a selection, on a `select_text` screen or in an open text field |
+| `double-tap-at X,Y` | two quick taps on a point, on a `select_text` screen or in an open text field |
 | `double-hold-at X,Y` | a quick tap, then a second contact held on the same point, on a `select_text` screen |
 | `type TEXT` | taps the on-screen key for each character in turn |
 | `expect TEXT` | fails unless something on the screen says it |
