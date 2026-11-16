@@ -117,6 +117,38 @@ impl Replay {
             millis,
         )
     }
+    /// A finger that lands, stays still for the runtime's hold time, and lifts.
+    ///
+    /// The same decoder and the same `HoldTracker` a real finger goes through:
+    /// the touch lands at `millis`, and lifts `HOLD_MILLIS` later, so the lift
+    /// is reported as a hold exactly as the device reports one.
+    pub fn hold(
+        &mut self,
+        x: u32,
+        y: u32,
+        pose: &PanelPose<'_>,
+        millis: u64,
+    ) -> io::Result<Vec<(TouchEvent, bool)>> {
+        if !self.decoder.is_quiescent() {
+            return Err(io::Error::other(
+                "finish or resynchronize the active raw gesture before holding",
+            ));
+        }
+        let (x, y) = pose
+            .display_to_touch(x, y)
+            .ok_or_else(|| io::Error::other("touch is outside the selected profile"))?;
+        let mut events = self.touch(
+            &format!("3 47 0;3 57 1;3 53 {x};3 54 {y};0 0 0"),
+            pose,
+            millis,
+        )?;
+        events.extend(self.touch(
+            "3 57 -1;0 0 0",
+            pose,
+            millis.saturating_add(kobo_hal::gesture::HOLD_MILLIS),
+        )?);
+        Ok(events)
+    }
     /// Independently authored fixture coordinate, not a device event capture.
     pub fn fixture_tap(
         &mut self,
@@ -229,6 +261,29 @@ mod tests {
         replay.touch("0 0 0", pose, 1000).unwrap();
         replay.resynchronize("released").unwrap();
         assert_eq!(replay.tap(100, 200, pose, 1000).unwrap().len(), 2);
+    }
+    #[test]
+    fn a_synthetic_hold_lands_then_lifts_after_the_hold_time_as_a_hold() {
+        let pose = &super::super::POSE;
+        let mut replay = Replay::new(pose);
+        let events = replay.hold(100, 200, pose, 1000).unwrap();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                (TouchEvent::Down { .. }, false),
+                (TouchEvent::Up { .. }, true)
+            ]
+        ));
+        assert!(
+            replay.is_quiescent(),
+            "the finger is lifted, ready for the next gesture"
+        );
+        // A tap straight after is an ordinary tap, not a second hold.
+        let tap = replay.tap(100, 200, pose, 1000).unwrap();
+        assert!(matches!(
+            tap.as_slice(),
+            [_, (TouchEvent::Up { .. }, false)]
+        ));
     }
     #[test]
     fn page_keys_use_hal_edges_and_portrait_mapping_and_bad_records_do_not_mutate() {

@@ -1944,6 +1944,7 @@ A script is one step per line; `#` is a comment.
 | `tap LABEL` | finds the node whose text carries `LABEL` and taps its centre |
 | `tap-id ACTION` | taps the control raising `ACTION`, by stable action name or numeric ID |
 | `tap-at X,Y` | taps a point, for a control with no words |
+| `hold-at X,Y` | holds a point for the hold time, for an app that selects words (the layout JSON's `textHits` gives each word's rectangle) |
 | `type TEXT` | taps the on-screen key for each character in turn |
 | `expect TEXT` | fails unless something on the screen says it |
 | `expect-missing TEXT` | fails if something does |
