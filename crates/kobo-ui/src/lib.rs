@@ -14,6 +14,7 @@
 mod board;
 mod notice;
 pub use notice::notice_rect;
+pub mod edit;
 pub mod keyboard;
 mod pencil;
 pub use board::{BoardCell, BoardClue, BoardMark, BoardSurface};
@@ -5197,6 +5198,11 @@ pub enum FieldKind {
     /// A web or mail address, where a space is never wanted and `/`, `.` and
     /// `@` are.
     Address,
+    /// A paragraph or more of writing: up to
+    /// [`keyboard::MAX_PROSE_TEXT`] characters rather than
+    /// [`keyboard::MAX_TEXT`], set on as many lines as fit above the keys,
+    /// with keys that move the caret.
+    Prose,
 }
 
 /// How loudly a [`Node::Banner`] speaks.

@@ -30,7 +30,7 @@ use kobo_protocol::{SecretTarget, TextOutcome};
 use kobo_ui::FieldKind;
 
 pub(crate) use kobo_ui::keyboard::{key_name, BACKSPACE, ENTER, LAYER, SHIFT, SPACE};
-pub use kobo_ui::keyboard::{Keyboard, Layer, Pressed, MAX_TEXT};
+pub use kobo_ui::keyboard::{Keyboard, Layer, Pressed, MAX_PROSE_TEXT, MAX_TEXT};
 
 /// The action an answered field arrives as.
 ///
@@ -117,6 +117,27 @@ impl TextEntry {
     #[must_use]
     pub fn address(self) -> Self {
         self.kind(FieldKind::Address)
+    }
+
+    /// A field for a paragraph or more of writing: it holds
+    /// [`MAX_PROSE_TEXT`] characters rather than [`MAX_TEXT`], shows as many
+    /// lines as fit above the keys, and has keys that move the caret. Check
+    /// [`Self::fits`] before opening it with text: anything past the limit
+    /// is cut off.
+    ///
+    /// Needs a runtime that knows [`FieldKind::Prose`]. One that predates it
+    /// refuses the request rather than drawing a field the text does not fit
+    /// in.
+    #[must_use]
+    pub fn prose(self) -> Self {
+        self.kind(FieldKind::Prose)
+    }
+
+    /// Whether `text` fits in this field whole, for an application that
+    /// would rather say so than open the field with the end cut off.
+    #[must_use]
+    pub fn fits(&self, text: &str) -> bool {
+        self.fresh().edit().fits(text)
     }
 
     /// Chooses the keys this field opens on. A secret needs somewhere to go
@@ -272,7 +293,14 @@ impl TextEntry {
                     prompt
                 },
                 hint: bounded(hint, kobo_protocol::MAX_TEXT_HINT_LEN),
-                initial: bounded(self.keyboard.text(), kobo_protocol::MAX_TYPED_LEN),
+                initial: bounded(
+                    self.keyboard.text(),
+                    if self.kind == FieldKind::Prose {
+                        kobo_protocol::MAX_PROSE_TYPED_LEN
+                    } else {
+                        kobo_protocol::MAX_TYPED_LEN
+                    },
+                ),
                 submit: if submit.trim().is_empty() {
                     "Done".to_owned()
                 } else {
@@ -827,6 +855,38 @@ mod tests {
             FieldKind::Text,
             "a secret needs saved_as"
         );
+    }
+
+    #[test]
+    fn a_prose_field_asks_for_a_whole_paragraph_and_says_what_will_not_fit() {
+        let paragraph = "A sentence of ordinary length, as people write. ".repeat(100);
+        assert!(paragraph.chars().count() > super::MAX_TEXT);
+        let mut entry = TextEntry::new().prose();
+        assert_eq!(entry.keyboard().kind(), FieldKind::Prose);
+        assert!(entry.fits(&paragraph));
+        assert!(!TextEntry::new().fits(&paragraph));
+        assert!(!entry.fits(&"x".repeat(super::MAX_PROSE_TEXT + 1)));
+        entry.open_with(paragraph.clone());
+        let mut context = Context::default();
+        context.set_screen(
+            ScreenBuilder::new("retype")
+                .top_bar("Retype")
+                .text_entry(&entry, "Retype the paragraph", "Done")
+                .build(),
+        );
+        let commands = context.take_commands();
+        let Some(DeviceRequest::TypeText { initial, kind, .. }) = testing::asked(&commands) else {
+            panic!("the field was not asked for: {commands:?}")
+        };
+        assert_eq!((initial, *kind), (&paragraph, FieldKind::Prose));
+        kobo_protocol::encode(&kobo_protocol::Frame {
+            version: kobo_protocol::VERSION,
+            request_id: 1,
+            message: kobo_protocol::Message::DeviceRequest(
+                testing::asked(&commands).cloned().expect("asked"),
+            ),
+        })
+        .expect("a paragraph fits on the wire");
     }
 
     #[test]

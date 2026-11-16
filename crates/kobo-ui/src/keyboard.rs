@@ -18,13 +18,18 @@
 //! out of step with what is drawn. It is also what lets `kobo drive type` find
 //! a key whether the runtime or an application drew it.
 //!
-//! ## Why there is no cursor
+//! ## The caret
 //!
-//! Text is only ever appended to or deleted from the end. Moving a caret needs
-//! a caret to be visible, which needs a repaint per tap on a panel that takes
-//! tens of milliseconds a repaint, and the payoff is editing in the middle of
-//! a search query.
+//! The text is a [`TextEdit`], so it has a caret and may have a selection:
+//! a key types at the caret, in place of the selection, and backspace takes
+//! the character before the caret or the selection. A keyboard starts with
+//! its caret at the end and nothing here moves it except the caret keys a
+//! [`FieldKind::Prose`] keyboard draws, so a keyboard an application draws
+//! itself, with nowhere to tap a caret into, still appends and deletes at the
+//! end. A field drawn with somewhere to tap places the caret and selects
+//! through [`Keyboard::edit_mut`].
 
+use crate::edit::TextEdit;
 use crate::{ActionId, Cell, CellTone, FieldKind, Glyph};
 
 /// The longest string the keyboard will accumulate, in characters.
@@ -34,6 +39,19 @@ use crate::{ActionId, Cell, CellTone, FieldKind, Glyph};
 /// type. It is generous enough for a search query, a chat message or an
 /// access token.
 pub const MAX_TEXT: usize = 512;
+
+/// The longest text a [`FieldKind::Prose`] keyboard will accumulate, in
+/// characters: a long paragraph, about a thousand words.
+///
+/// The field is still laid out on every keystroke, but only its visible lines
+/// are drawn and only the lines from the edit on are broken again, so the
+/// cost of a keystroke does not grow with the text.
+pub const MAX_PROSE_TEXT: usize = 6000;
+
+/// The most bytes a [`FieldKind::Prose`] keyboard's text may take, which is
+/// the longest string the protocol carries. Six thousand characters of most
+/// alphabets fit well inside it.
+pub const MAX_PROSE_BYTES: usize = 16_384;
 
 /// Letters, in the arrangement every reader already knows.
 const LETTERS: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
@@ -76,6 +94,10 @@ pub const CANCEL: &str = "kb.cancel";
 pub const AT: &str = "kb.at";
 pub const SLASH: &str = "kb.slash";
 pub const DOT: &str = "kb.dot";
+/// The keys that move the caret a character, either side of the space bar
+/// on a [`FieldKind::Prose`] keyboard.
+pub const LEFT: &str = "kb.left";
+pub const RIGHT: &str = "kb.right";
 
 /// The action name of the character key at `row` and `column`.
 #[must_use]
@@ -88,8 +110,8 @@ pub fn key_name(row: usize, column: usize) -> String {
 pub enum Pressed {
     /// The text changed. The caller should repaint.
     Edited,
-    /// A modifier changed. The labels changed, so the caller should repaint,
-    /// but the text did not.
+    /// A modifier changed, or the caret moved. The caller should repaint,
+    /// but the text did not change.
     Shifted,
     /// The reader asked to accept what they typed.
     Submitted,
@@ -142,7 +164,7 @@ impl Key {
 /// An on-screen keyboard and the text typed on it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Keyboard {
-    text: String,
+    text: TextEdit,
     shift: bool,
     layer: Layer,
     kind: FieldKind,
@@ -177,9 +199,18 @@ impl Keyboard {
     /// has a space in it and those three are in nearly every one. A secret
     /// opens on the letters like ordinary text: most tokens are mostly
     /// letters, and nothing about a password says which characters it uses.
+    ///
+    /// Prose opens on the letters too, holds [`MAX_PROSE_TEXT`] characters
+    /// rather than [`MAX_TEXT`], and has keys either side of its space bar
+    /// that move the caret.
     #[must_use]
     pub fn for_kind(kind: FieldKind) -> Self {
         Self {
+            text: if kind == FieldKind::Prose {
+                TextEdit::new(MAX_PROSE_TEXT, MAX_PROSE_BYTES)
+            } else {
+                TextEdit::default()
+            },
             layer: if kind == FieldKind::Number {
                 Layer::Symbols
             } else {
@@ -251,25 +282,41 @@ impl Keyboard {
         Self::new().typed(text)
     }
 
-    /// The same keyboard with `text` appended, truncated to [`MAX_TEXT`].
+    /// The same keyboard with `text` typed at the caret, truncated to
+    /// [`Self::limit`].
     #[must_use]
     pub fn typed(mut self, text: impl Into<String>) -> Self {
-        for character in text.into().chars() {
-            self.push(character);
-        }
+        self.text.insert(&text.into());
         self
     }
 
     #[must_use]
     pub fn text(&self) -> &str {
+        self.text.text()
+    }
+
+    /// The text with its caret and selection.
+    #[must_use]
+    pub const fn edit(&self) -> &TextEdit {
         &self.text
+    }
+
+    /// The text with its caret and selection, to place the caret or select.
+    pub fn edit_mut(&mut self) -> &mut TextEdit {
+        &mut self.text
+    }
+
+    /// The most characters this keyboard will hold.
+    #[must_use]
+    pub const fn limit(&self) -> usize {
+        self.text.max_chars()
     }
 
     /// How many characters have been typed, which is what a reader comparing
     /// a token against the length a service printed wants to know.
     #[must_use]
-    pub fn count(&self) -> usize {
-        self.text.chars().count()
+    pub const fn count(&self) -> usize {
+        self.text.count()
     }
 
     #[must_use]
@@ -298,7 +345,7 @@ impl Keyboard {
 
     /// Takes the text, leaving the keyboard empty and ready for the next entry.
     pub fn take(&mut self) -> String {
-        std::mem::take(&mut self.text)
+        self.text.take()
     }
 
     /// Applies `action` if it belongs to the keyboard.
@@ -335,8 +382,18 @@ impl Keyboard {
             // By character, not by byte. Truncating a multi-byte character
             // would leave the string invalid, and this is the one operation a
             // reader repeats without looking.
-            self.text.pop();
+            self.text.backspace();
             return Some(Pressed::Edited);
+        }
+        if self.kind == FieldKind::Prose && !self.words {
+            if action == ActionId::from_name(LEFT) {
+                self.text.left();
+                return Some(Pressed::Shifted);
+            }
+            if action == ActionId::from_name(RIGHT) {
+                self.text.right();
+                return Some(Pressed::Shifted);
+            }
         }
         if action == ActionId::from_name(ENTER) {
             return Some(Pressed::Submitted);
@@ -454,6 +511,18 @@ impl Keyboard {
             for (name, label) in [(AT, "@"), (SLASH, "/"), (DOT, ".")] {
                 drawn[3].push(Key::new(name, label));
             }
+        } else if self.kind == FieldKind::Prose {
+            // Either side of the space bar, where a thumb already is. Five
+            // keys in the row, so each is still twice as wide as a letter.
+            drawn[3].push(Key {
+                glyph: Some(Glyph::Previous),
+                ..Key::new(LEFT, "Caret left")
+            });
+            drawn[3].push(Key::new(SPACE, "space"));
+            drawn[3].push(Key {
+                glyph: Some(Glyph::Next),
+                ..Key::new(RIGHT, "Caret right")
+            });
         } else {
             drawn[3].push(Key::new(SPACE, "space"));
         }
@@ -490,15 +559,13 @@ impl Keyboard {
     fn push(&mut self, character: char) {
         // Counted in characters rather than bytes so the limit means the same
         // thing whatever alphabet the reader is using.
-        if self.count() < MAX_TEXT {
-            self.text.push(character);
-        }
+        self.text.insert(character.encode_utf8(&mut [0; 4]));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Keyboard, Layer, Pressed, MAX_TEXT};
+    use super::{Keyboard, Layer, Pressed, MAX_PROSE_TEXT, MAX_TEXT};
     use crate::{ActionId, CellTone, FieldKind};
 
     /// The pages a reader can reach from a fresh keyboard, as the taps that
@@ -522,6 +589,7 @@ mod tests {
             FieldKind::Secret,
             FieldKind::Number,
             FieldKind::Address,
+            FieldKind::Prose,
         ] {
             let mut typed = String::new();
             for page in PAGES {
@@ -731,5 +799,63 @@ mod tests {
         assert_eq!(keyboard.count(), MAX_TEXT);
         assert_eq!(keyboard.take().chars().count(), MAX_TEXT);
         assert!(keyboard.is_empty());
+    }
+
+    #[test]
+    fn prose_holds_a_long_paragraph_and_moves_its_caret_with_two_keys() {
+        let mut keyboard = Keyboard::for_kind(FieldKind::Prose);
+        assert_eq!(keyboard.layer(), Layer::Letters);
+        assert_eq!(keyboard.limit(), MAX_PROSE_TEXT);
+        let bottom: Vec<_> = keyboard.keys("Done")[3]
+            .iter()
+            .map(|key| key.name.clone())
+            .collect();
+        assert_eq!(
+            bottom,
+            ["kb.layer", "kb.left", "kb.space", "kb.right", "kb.enter"]
+        );
+        for name in ["kb.r0c0", "kb.r0c2"] {
+            tap(&mut keyboard, name);
+        }
+        assert_eq!(tap(&mut keyboard, "kb.left"), Some(Pressed::Shifted));
+        tap(&mut keyboard, "kb.r0c1");
+        assert_eq!(keyboard.text(), "qwe");
+        assert_eq!(keyboard.edit().caret(), 2);
+        tap(&mut keyboard, "kb.right");
+        tap(&mut keyboard, "kb.backspace");
+        assert_eq!(keyboard.text(), "qw");
+
+        let long = Keyboard::for_kind(FieldKind::Prose).typed("x".repeat(MAX_PROSE_TEXT + 9));
+        assert_eq!(long.count(), MAX_PROSE_TEXT);
+    }
+
+    #[test]
+    fn only_prose_has_or_claims_the_caret_keys() {
+        for kind in [
+            FieldKind::Text,
+            FieldKind::Secret,
+            FieldKind::Number,
+            FieldKind::Address,
+        ] {
+            let mut keyboard = Keyboard::for_kind(kind).typed("ab");
+            assert!(
+                !keyboard
+                    .keys("Go")
+                    .iter()
+                    .flatten()
+                    .any(|key| key.name == "kb.left" || key.name == "kb.right"),
+                "{kind:?}"
+            );
+            assert_eq!(tap(&mut keyboard, "kb.left"), None);
+            let first = keyboard.resolves(ActionId::from_name("kb.r0c0"));
+            tap(&mut keyboard, "kb.r0c0");
+            assert_eq!(
+                keyboard.text().chars().last(),
+                first,
+                "{kind:?} types at the end"
+            );
+            assert!(keyboard.text().starts_with("ab"));
+        }
+        assert_eq!(tap(&mut Keyboard::for_words(), "kb.left"), None);
     }
 }

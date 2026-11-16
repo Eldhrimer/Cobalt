@@ -199,3 +199,85 @@ fn back_in_the_simulator_cancels_the_field() {
     drop(server);
     std::fs::remove_dir_all(root).ok();
 }
+
+/// The entry as the simulator draws it, caret and all, and where its first
+/// line is on the panel: its left edge and its middle.
+fn entry(session: &AppSession) -> (String, u32, u32, u32) {
+    let state = session.state.lock().expect("state");
+    let metrics = super::profile_metrics().oriented(state.orientation);
+    let layout = state.screen.layout_with(&metrics, &state.chrome);
+    let bounds = layout
+        .nodes
+        .iter()
+        .find(|node| matches!(node.kind, LayoutKind::RichText(_)) && node.text_lines.is_empty())
+        .expect("the entry is laid out")
+        .rect;
+    let text = state
+        .screen
+        .nodes
+        .iter()
+        .find_map(|node| match node {
+            kobo_ui::Node::RichText { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .expect("the entry is drawn");
+    let lines = i32::try_from(text.lines().count()).expect("a few lines");
+    let at = |value: i32| u32::try_from(value).expect("on the panel");
+    (
+        text,
+        at(bounds.x + 1),
+        at(bounds.y + bounds.height / lines / 2),
+        at(bounds.x + bounds.width - 1),
+    )
+}
+
+#[test]
+fn a_route_places_the_caret_drags_a_selection_and_double_taps_a_word_in_a_field() {
+    let root = private_temp_dir();
+    let socket = root.join("app.sock");
+    let server = AppServer::bind("127.0.0.1:0", &socket).expect("bind");
+    let app = application(&socket, "todo", FieldKind::Prose);
+    let session = server.accept_app().expect("accept");
+    wait_for_keyboard(&session);
+    for key in ["kb.r0c0", "kb.r0c1", "kb.space", "kb.r0c2"] {
+        tap(&session, key);
+    }
+    let (text, left, middle, right) = entry(&session);
+    assert_eq!(text, "qw e|");
+    // tap-at: the caret goes to the start of the line.
+    session
+        .replay_input(&format!("tap x={left}&y={middle}"))
+        .expect("a tap in the text");
+    tap(&session, "kb.r0c3");
+    assert_eq!(entry(&session).0, "r|qw e");
+    // drag-at: across the whole line, and the next key replaces it.
+    session
+        .replay_input(&format!(
+            "drag x1={left}&y1={middle}&x2={right}&y2={middle}"
+        ))
+        .expect("a drag in the text");
+    assert_eq!(entry(&session).0, "rqw e", "selected, so no caret");
+    tap(&session, "kb.r0c4");
+    tap(&session, "kb.space");
+    tap(&session, "kb.r0c5");
+    assert_eq!(entry(&session).0, "t y|");
+    // Two taps in two steps are two taps; double-tap-at takes the word.
+    session
+        .replay_input(&format!("tap x={left}&y={middle}"))
+        .expect("a tap");
+    session
+        .replay_input(&format!("tap x={left}&y={middle}"))
+        .expect("a second tap");
+    assert_eq!(entry(&session).0, "|t y");
+    session
+        .replay_input(&format!("double-tap x={left}&y={middle}"))
+        .expect("a double tap");
+    tap(&session, "kb.r0c6");
+    assert_eq!(entry(&session).0, "u| y");
+    tap(&session, "kb.enter");
+    let (_, answer) = app.join().expect("application");
+    assert_eq!(answer, DeviceResult::Text(TextOutcome::Typed("u y".into())));
+    drop(session);
+    drop(server);
+    std::fs::remove_dir_all(root).ok();
+}

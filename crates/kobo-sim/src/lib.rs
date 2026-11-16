@@ -1584,6 +1584,9 @@ impl AppState {
             messages.extend(self.input_event(event, held));
             return;
         };
+        if self.type_in_field(event, touch, millis) {
+            return;
+        }
         let mut selector = std::mem::take(&mut self.selector);
         let outcome = selector.touch(touch, millis, &mut || self.selectable_layout());
         self.selector = selector;
@@ -1606,6 +1609,43 @@ impl AppState {
                         end: gesture.hit.end,
                     });
                 }
+            }
+        }
+    }
+
+    /// Gives one touch to the open text field, as the device does before
+    /// anything else sees it: in the field's text it places the caret or
+    /// selects. True when the field took it; a touch it passes on is
+    /// resolved against the keys as a tap, as before.
+    fn type_in_field(
+        &mut self,
+        event: kobo_hal::TouchEvent,
+        touch: kobo_ui::select::Touch,
+        millis: u64,
+    ) -> bool {
+        // A field held for an application behind another is not on the
+        // panel, so the touch is not its to take.
+        if self.runtime_navigation && self.lifecycle == Lifecycle::Background {
+            return false;
+        }
+        let Some((_, field)) = self.typing.as_mut() else {
+            return false;
+        };
+        if matches!(event, kobo_hal::TouchEvent::Move { .. }) && !field.is_pressed() {
+            return false;
+        }
+        let layout = self
+            .screen
+            .layout_with(&profile_metrics().oriented(self.orientation), &self.chrome);
+        let Some((_, field)) = self.typing.as_mut() else {
+            return false;
+        };
+        match field.touch(touch, millis, &layout) {
+            kobod::text_entry::Touched::Pass => false,
+            kobod::text_entry::Touched::Taken => true,
+            kobod::text_entry::Touched::Redraw => {
+                self.repaint_field();
+                true
             }
         }
     }
@@ -1638,6 +1678,12 @@ impl AppState {
                 self.expire_selection(deadline, messages);
                 ended = ended.max(deadline);
             }
+        }
+        // Two steps that each tap in an open field are two taps, not a
+        // double tap, however quickly a route sends them: a word is
+        // selected by a double-tap step.
+        if self.typing.is_some() {
+            ended = ended.saturating_add(kobo_ui::select::DOUBLE_TAP_MILLIS + 1);
         }
         self.gesture_spent(ended)
     }
